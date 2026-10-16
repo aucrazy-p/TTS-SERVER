@@ -4,19 +4,28 @@
 
 ## 一、VPS 一键部署
 
-在 VPS 上执行（**交互式**：运行时会弹菜单问你是否配置反代，并让你输入域名）：
+在 VPS 上执行（**菜单式**：运行后直接进入管理菜单）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh)
 ```
 
-脚本会自动完成：装 docker → 生成随机 `TTS_TOKEN` → 构建并启动服务（默认监听 `127.0.0.1:8080`，**若 8080 被占用会自动分配一个空闲端口**）→ 询问对外访问方式 → 把你的域名反代写进 Caddyfile 并 `reload`（未装 Caddy 会自动装）。结束会输出 legado_NG 要填的「服务地址」（含 `?token=...`）。
+> ⚠️ 不要写成 `curl ... | bash`：那样 stdin 是管道，菜单读不到输入。无人值守才用管道并带变量。
 
-**前提**：选了 Caddy 反代时，域名需已解析到本机公网 IP（否则证书申请失败，配置仍会写进去）。
+菜单项：
 
-无人值守 / 非交互（用环境变量跳过提问，变量必须写在 `bash` 这一侧）：
-- 自动配 Caddy 反代：`curl -fsSL .../deploy.sh | DOMAIN=你的域名 bash`
-- 指定端口（否则默认 8080，被占则自动换空闲端口）：`curl -fsSL .../deploy.sh | PORT=9090 bash`
+```
+1) 安装  2) 卸载  3) 启动  4) 停止  5) 状态
+6) 日志  7) 更新  8) 更改端口  9) 对外访问配置(Caddy 反代)  0) 退出
+```
+
+选 `1` 安装：自动装 docker → 生成随机 `TTS_TOKEN` → 构建并启动（默认 `127.0.0.1:8080`，**被占用会自动分配空闲端口**）→ 结束时询问是否配置对外访问，回答 `y` 并输入域名即全自动（自动装 Caddy → 写 Caddyfile → 自动签 HTTPS 证书并续期 → reload）。之后随时可从菜单选 `9` 补配或改配。
+
+**前提**：配置反代时，域名需已解析到本机公网 IP；且 80/443 未被其他服务占用（若被占用脚本会列出占用进程/容器）。
+
+无人值守 / 非交互（变量必须写在 `bash` 这一侧）：
+- 自动安装 + 自动配 Caddy 反代：`curl -fsSL .../deploy.sh | DOMAIN=你的域名 bash`
+- 指定端口：`curl -fsSL .../deploy.sh | DOMAIN=你的域名 PORT=9090 bash`
 
 ## 二、legado_NG 配置
 
@@ -32,7 +41,8 @@ curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh
 ./tts-server.sh update      # 更新并重建
 ./tts-server.sh uninstall   # 卸载（保留 .env）
 ./tts-server.sh change-port # 更改端口（菜单选 8 亦可），自动同步 Caddy 反代端口
-# 非交互：NEW_PORT=9090 ./tts-server.sh change-port
+./tts-server.sh setup-caddy # 对外访问配置（菜单选 9 亦可）：装 Caddy + 写反代 + 签证书，幂等可重复执行
+# 非交互：NEW_PORT=9090 ./tts-server.sh change-port ；DOMAIN=你的域名 ./tts-server.sh setup-caddy
 ```
 
 ## 说明

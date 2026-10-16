@@ -4,6 +4,7 @@
 #   交互菜单:  ./tts-server.sh
 #   一键安装:  ./tts-server.sh install   (可用于 curl|bash 非交互)
 #   更改端口:  NEW_PORT=9090 ./tts-server.sh change-port   (或菜单选 8)
+#   对外访问:  ./tts-server.sh setup-caddy   (或菜单选 9；无人值守: DOMAIN=xx ./tts-server.sh setup-caddy)
 #   查看状态:  ./tts-server.sh status
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -170,6 +171,18 @@ install(){
     $DCC up -d --build
   fi
   show_url
+  # 交互式安装后询问是否立即配置对外访问（无人值守时自动跳过）
+  if [ -t 0 ] || [ -c /dev/tty ]; then
+    local ans=""
+    if [ -t 0 ]; then
+      read -rp "是否现在配置对外访问（Caddy 反代，自动装 Caddy + 签 HTTPS 证书）? [y/N]: " ans || true
+    else
+      read -rp "是否现在配置对外访问（Caddy 反代）? [y/N]: " ans < /dev/tty || true
+    fi
+    case "$ans" in
+      y|Y) setup_caddy || true ;;
+    esac
+  fi
 }
 
 uninstall(){
@@ -197,6 +210,180 @@ update(){
   git pull || warn "非 git 目录或 pull 失败，跳过更新源码"
   $DCC up -d --build
   info "更新完成"
+}
+
+# ---------- 对外访问（Caddy 反代，全自动）----------
+print_caddy(){
+  local domain="${1:-你的域名}" port tok
+  port=$(get_port)
+  tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+  echo "-------------------------------------------"
+  echo "请手动在反代配置中加入以下站点（反代到本机 $port）："
+  echo
+  echo "    $domain {"
+  echo "        reverse_proxy 127.0.0.1:$port"
+  echo "    }"
+  echo
+  echo "legado_NG 引擎『服务地址』填： https://$domain${tok:+?token=$tok}"
+  echo "-------------------------------------------"
+}
+
+# 自动安装 Caddy：三级回退（apt 官方仓库 -> caddyserver.com 官方接口 -> GitHub Release）
+install_caddy(){
+  info "未检测到 caddy，开始自动安装..."
+  local arch="amd64"
+  case "$(uname -m)" in
+    x86_64)  arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+  esac
+
+  local ok=0
+  # [1/3] 官方 apt 仓库 (Debian/Ubuntu，自带 systemd 服务与 /etc/caddy/Caddyfile)
+  if [ "$ok" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
+    info "[1/3] 尝试官方 apt 仓库安装..."
+    $SUDO apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https >/dev/null 2>&1 || true
+    $SUDO mkdir -p /usr/share/keyrings
+    $SUDO curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' -o /tmp/caddy.gpg.key 2>/dev/null \
+      && $SUDO gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg /tmp/caddy.gpg.key 2>/dev/null \
+      && $SUDO curl -fsSL 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list 2>/dev/null \
+      && $SUDO apt-get update -qq >/dev/null 2>&1 \
+      && $SUDO apt-get install -y -qq caddy >/dev/null 2>&1 || true
+    command -v caddy >/dev/null 2>&1 && ok=1
+    [ "$ok" -eq 0 ] && warn "apt 仓库安装失败，换下一种方式..."
+  fi
+
+  # [2/3] caddyserver.com 官方下载接口（返回静态二进制）
+  if [ "$ok" -eq 0 ]; then
+    info "[2/3] 尝试从 caddyserver.com 下载静态二进制..."
+    if $SUDO curl -fsSL "https://caddyserver.com/api/download?os=linux&arch=${arch}" -o /tmp/caddy.bin 2>/dev/null \
+       && [ -s /tmp/caddy.bin ] \
+       && $SUDO install -m 0755 /tmp/caddy.bin /usr/local/bin/caddy; then
+      ok=1
+    else
+      warn "官方接口下载失败，换下一种方式..."
+    fi
+  fi
+
+  # [3/3] GitHub Release（资产名带版本号，需先取 latest tag）
+  if [ "$ok" -eq 0 ]; then
+    info "[3/3] 尝试从 GitHub Release 下载..."
+    local ver
+    ver=$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest 2>/dev/null \
+          | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed 's/.*: *"//;s/"//' || true)
+    if [ -n "$ver" ] \
+       && $SUDO curl -fsSL "https://github.com/caddyserver/caddy/releases/download/${ver}/caddy_${ver#v}_linux_${arch}.tar.gz" -o /tmp/caddy.tar.gz 2>/dev/null \
+       && $SUDO tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy 2>/dev/null \
+       && $SUDO chmod +x /usr/local/bin/caddy \
+       && command -v caddy >/dev/null 2>&1; then
+      ok=1
+    fi
+  fi
+
+  if [ "$ok" -eq 0 ]; then
+    err "三种方式均安装失败（检查网络/代理后重试）"
+    return 1
+  fi
+  info "Caddy 安装完成: $(caddy version 2>/dev/null || echo unknown)"
+
+  # 兜底：确保存在 Caddyfile 与 systemd 服务（apt 安装已自带，会自动跳过）
+  $SUDO mkdir -p /etc/caddy
+  if [ ! -s /etc/caddy/Caddyfile ]; then
+    $SUDO tee /etc/caddy/Caddyfile >/dev/null <<'EOF'
+{
+    # Caddy 全局选项（如需证书到期通知可填 email）
+}
+EOF
+  fi
+  if command -v systemctl >/dev/null 2>&1 \
+     && ! systemctl list-unit-files 2>/dev/null | grep -q '^caddy.service'; then
+    $SUDO tee /etc/systemd/system/caddy.service >/dev/null <<'EOF'
+[Unit]
+Description=Caddy
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    $SUDO systemctl daemon-reload
+  fi
+  $SUDO systemctl enable --now caddy >/dev/null 2>&1 || warn "caddy 服务启动失败，请检查 80/443 是否被占用"
+  command -v caddy >/dev/null 2>&1
+}
+
+# 配置对外访问：装 Caddy -> 写 Caddyfile(带标记块) -> reload（幂等，可重复执行）
+setup_caddy(){
+  local domain="${DOMAIN:-}"
+  if [ -z "$domain" ]; then
+    read -rp "输入公网域名（需已解析到本机 IP，如 tts.example.com）: " domain || domain=""
+  fi
+  if [ -z "$domain" ]; then
+    warn "未提供域名，跳过对外访问配置"
+    return 1
+  fi
+
+  if ! command -v caddy >/dev/null 2>&1; then
+    if port_in_use 80 || port_in_use 443; then
+      warn "80/443 已被占用，Caddy 无法接管 443（避免与现有服务冲突）。占用情况："
+      ss -ltnp 2>/dev/null | grep -E ':(80|443) ' | sed 's/^/    /' || true
+      if command -v docker >/dev/null 2>&1; then
+        local dmap
+        dmap=$(docker ps --format '{{.Names}} => {{.Ports}}' 2>/dev/null | grep -E ':(80|443)->' || true)
+        if [ -n "$dmap" ]; then
+          warn "占用者来自 Docker 容器："
+          echo "$dmap" | sed 's/^/    /'
+        fi
+      fi
+      print_caddy "$domain"; return 1
+    fi
+    install_caddy || { warn "Caddy 安装失败，改为打印片段："; print_caddy "$domain"; return 1; }
+  fi
+
+  local cf
+  cf=$(find_caddyfile)
+  if [ -z "$cf" ]; then
+    warn "未找到 Caddyfile，改为打印片段："; print_caddy "$domain"; return 1
+  fi
+  if head -c1 "$cf" | grep -q '{'; then
+    warn "Caddy 使用 JSON 配置，自动写入不适用，改为打印片段："; print_caddy "$domain"; return 1
+  fi
+
+  local port
+  port=$(get_port)
+  cp "$cf" "${cf}.bak.$(date +%s)"
+  if grep -q "$domain {" "$cf"; then
+    info "Caddyfile 已含 $domain，跳过重复写入"
+  else
+    cat >> "$cf" <<EOF
+
+# >>> Added by TTS-SERVER $(date +%F) <<<
+$domain {
+    reverse_proxy 127.0.0.1:$port
+}
+# >>> end TTS-SERVER <<<
+EOF
+    info "已向 $cf 追加 $domain 反代配置（原文件已备份为 ${cf}.bak.*）"
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; then
+    systemctl reload caddy && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
+  else
+    caddy reload --config "$cf" >/dev/null 2>&1 && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
+  fi
+
+  local tok
+  tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+  echo "-------------------------------------------"
+  echo "✓ 对外暴露已配置： https://$domain${tok:+?token=$tok}"
+  echo "  （HTTPS 证书由 Caddy 自动向 Let's Encrypt 申请并续期）"
+  echo "  到 legado_NG 导入 self-hosted-edge-tts.json，服务地址填上面的 URL"
+  echo "-------------------------------------------"
 }
 
 # 定位 Caddyfile（优先 systemd --config，否则常见路径）
@@ -294,6 +481,7 @@ menu(){
     echo " 6) 查看日志 logs"
     echo " 7) 更新 update"
     echo " 8) 更改端口 change-port"
+    echo " 9) 对外访问配置 setup-caddy"
     echo " 0) 退出"
     read -rp "请选择 [0-9]: " c
     case "$c" in
@@ -305,6 +493,7 @@ menu(){
       6) logs ;;
       7) update ;;
       8) change_port ;;
+      9) setup_caddy || true ;;
       0) exit 0 ;;
       *) warn "无效选择" ;;
     esac
@@ -321,6 +510,8 @@ case "${1:-}" in
   logs)        logs; exit 0 ;;
   update)      update; exit 0 ;;
   change-port) change_port; exit 0 ;;
+  setup-caddy) setup_caddy; exit 0 ;;
+  caddy-snippet) print_caddy "${DOMAIN:-}"; exit 0 ;;
 esac
 
 menu
