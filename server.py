@@ -83,6 +83,53 @@ VOICES = [
 
 app = Flask(__name__)
 
+_STATUS_PAGE = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TTS-SERVER 状态</title>
+<style>
+ body{{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;background:#0f172a;color:#e2e8f0;
+      display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}}
+ .card{{background:#1e293b;border-radius:14px;padding:32px 40px;max-width:520px;width:92%;
+      box-shadow:0 8px 30px rgba(0,0,0,.35)}}
+ h1{{font-size:20px;margin:0 0 18px}}
+ .ok{{color:#4ade80}} .warn{{color:#facc15}} .bad{{color:#f87171}}
+ ul{{line-height:1.9;padding-left:20px;margin:14px 0}}
+ a{{color:#60a5fa}} code{{background:#334155;padding:2px 6px;border-radius:4px;font-size:.9em}}
+ .tip{{color:#94a3b8;font-size:13px;margin-top:16px}}
+</style></head><body><div class="card">
+<h1>🔊 TTS-SERVER</h1>
+<ul>
+ <li>{status_line}</li>
+ <li>音色数量：<b>{voice_count}</b> 个（legado_NG 默认全量）</li>
+ <li>Token：{token_line}</li>
+ <li>试听测试：<a href="{tts_test}">点我播放一段测试语音</a></li>
+ <li>音色清单：<a href="{voices_url}">/voices</a></li>
+</ul>
+<p class="tip">本服务为 legado_NG「自托管 Edge TTS」引擎专用 API，没有网页界面属正常现象。<br>
+legado_NG 里『服务地址』填本页地址栏的完整 URL（含 ?token=...）。</p>
+</div></body></html>"""
+
+
+@app.route("/")
+def index():
+    given = request.args.get("token", "")
+    if TOKEN and given and given != TOKEN:
+        status_line = '<span class="bad">✗ Token 错误</span>——请核对服务地址里的 ?token=... 是否完整'
+        token_line = '<span class="bad">校验失败</span>'
+    elif TOKEN and not given:
+        status_line = '<span class="warn">⚠ 服务运行中</span>，但你没带 token（legado_NG 调用时必须带）'
+        token_line = '已启用（未提供）'
+    else:
+        status_line = '<span class="ok">✓ 服务运行中，一切正常</span>'
+        token_line = '<span class="ok">校验通过</span>' if TOKEN else "未启用"
+
+    voices_url = f"/voices?token={given}" if given else "/voices"
+    tts_test = f"/tts?text=你好，自托管语音服务已就绪&token={given}" if given else "/tts?text=你好，自托管语音服务已就绪"
+    body = _STATUS_PAGE.format(status_line=status_line, voice_count=len(VOICES),
+                               token_line=token_line, voices_url=voices_url, tts_test=tts_test)
+    return Response(body, mimetype="text/html")
+
 
 def _authorized():
     if not TOKEN:
