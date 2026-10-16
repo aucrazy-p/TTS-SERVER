@@ -237,6 +237,14 @@ setup_caddy(){
     if port_in_use 80 || port_in_use 443; then
       warn "检测到 80/443 已被占用，Caddy 无法接管 443（避免与现有服务冲突）。占用情况："
       ss -ltnp 2>/dev/null | grep -E ':(80|443) ' | sed 's/^/    /'
+      if command -v docker >/dev/null 2>&1; then
+        local dmap
+        dmap=$(docker ps --format '{{.Names}} => {{.Ports}}' 2>/dev/null | grep -E ':(80|443)->' || true)
+        if [ -n "$dmap" ]; then
+          warn "占用者来自 Docker 容器："
+          echo "$dmap" | sed 's/^/    /'
+        fi
+      fi
       warn "若占用者本身就是反代（nginx/caddy/面板），请把下面片段加进其配置；"
       warn "若是无关服务且可停掉，停掉后重跑本脚本即可全自动完成。"
       print_caddy "$domain"; return
