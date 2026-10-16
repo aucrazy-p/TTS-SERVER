@@ -3,6 +3,7 @@
 # 用法:
 #   交互菜单:  ./tts-server.sh
 #   一键安装:  ./tts-server.sh install   (可用于 curl|bash 非交互)
+#   更改端口:  NEW_PORT=9090 ./tts-server.sh change-port   (或菜单选 9)
 #   查看状态:  ./tts-server.sh status
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -164,6 +165,89 @@ tunnel_help(){
   echo "把\"服务地址\"改成 https://tts.你的域名.com（设了 token 就加 ?token=...）"
 }
 
+# 定位 Caddyfile（优先 systemd --config，否则常见路径）
+find_caddyfile(){
+  local cf=""
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+    cf=$(systemctl show caddy.service -p ExecStart --value 2>/dev/null | grep -oE '(^| )--config[= ]\S+' | head -1 | sed -E 's/.*--config[= ]//')
+  fi
+  if [ -z "$cf" ]; then
+    for p in /etc/caddy/Caddyfile /usr/local/etc/caddy/Caddyfile "$HOME/Caddyfile" /etc/caddy/caddy.json; do
+      [ -f "$p" ] && cf="$p" && break
+    done
+  fi
+  echo "$cf"
+}
+
+# 在 TTS 标记块内把反代端口改为 new，并 reload caddy
+update_caddy_port(){
+  local old="$1" new="$2" cf
+  cf=$(find_caddyfile)
+  if [ -z "$cf" ]; then
+    warn "未找到 Caddyfile，无法自动更新反代端口，请手动把反代端口改为 $new"
+    return 1
+  fi
+  if head -c1 "$cf" | grep -q '{'; then
+    warn "Caddy 使用 JSON 配置，无法自动编辑，请手动把反代端口改为 $new"
+    return 1
+  fi
+  if ! grep -q '# >>> Added by TTS-SERVER' "$cf"; then
+    warn "Caddyfile 中未找到 TTS-SERVER 标记块（可能未走自动反代），请手动把反代端口改为 $new"
+    return 1
+  fi
+  cp "$cf" "${cf}.bak.$(date +%s)"
+  awk -v new="$new" '
+    /# >>> Added by TTS-SERVER/ { inblk=1 }
+    inblk && /reverse_proxy 127\.0\.0\.1:/ { print "    reverse_proxy 127.0.0.1:" new; next }
+    /# >>> end TTS-SERVER/ { inblk=0 }
+    { print }
+  ' "$cf" > "${cf}.tmp" && mv "${cf}.tmp" "$cf"
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; then
+    systemctl reload caddy && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
+  else
+    caddy reload --config "$cf" >/dev/null 2>&1 && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
+  fi
+}
+
+# 更改监听端口：更新 .env -> 重启容器 -> 同步更新 Caddy 反代端口
+change_port(){
+  local old new
+  old=$(get_port)
+  if [ -n "${NEW_PORT:-}" ]; then
+    new="$NEW_PORT"
+  else
+    read -rp "当前端口 $old，输入新端口 (留空取消): " new
+  fi
+  [ -z "$new" ] && { info "已取消更改"; return; }
+  case "$new" in
+    ''|*[!0-9]*) err "端口必须是数字"; return ;;
+  esac
+  if [ "$new" = "$old" ]; then
+    info "新端口与当前相同，无需更改"; return
+  fi
+  if port_in_use "$new"; then
+    err "端口 $new 已被占用，请换一个空闲端口"
+    return
+  fi
+  if [ -f "$ENV_FILE" ]; then
+    if grep -q '^PORT=' "$ENV_FILE"; then
+      sed -i "s/^PORT=.*/PORT=$new/" "$ENV_FILE"
+    else
+      printf 'PORT=%s\n' "$new" >> "$ENV_FILE"
+    fi
+  else
+    printf 'TTS_TOKEN=%s\nPORT=%s\n' "$(openssl rand -hex 16)" "$new" > "$ENV_FILE"
+  fi
+  info "已更新 .env -> PORT=$new"
+  ensure_docker
+  $DCC up -d
+  info "容器已用新端口重启"
+  if update_caddy_port "$old" "$new"; then
+    info "反代端口已同步为 $new"
+  fi
+  show_url
+}
+
 menu(){
   while true; do
     clear
@@ -176,8 +260,9 @@ menu(){
     echo " 6) 查看日志 logs"
     echo " 7) 更新 update"
     echo " 8) Cloudflare 隧道指引 tunnel"
+    echo " 9) 更改端口 change-port"
     echo " 0) 退出"
-    read -rp "请选择 [0-8]: " c
+    read -rp "请选择 [0-9]: " c
     case "$c" in
       1) install ;;
       2) uninstall ;;
@@ -187,6 +272,7 @@ menu(){
       6) logs ;;
       7) update ;;
       8) tunnel_help ;;
+      9) change_port ;;
       0) exit 0 ;;
       *) warn "无效选择" ;;
     esac
@@ -195,13 +281,14 @@ menu(){
 }
 
 case "${1:-}" in
-  install)   install; exit 0 ;;
-  uninstall) uninstall; exit 0 ;;
-  start)     start; exit 0 ;;
-  stop)      stop; exit 0 ;;
-  status)    status; exit 0 ;;
-  logs)      logs; exit 0 ;;
-  update)    update; exit 0 ;;
+  install)     install; exit 0 ;;
+  uninstall)   uninstall; exit 0 ;;
+  start)       start; exit 0 ;;
+  stop)        stop; exit 0 ;;
+  status)      status; exit 0 ;;
+  logs)        logs; exit 0 ;;
+  update)      update; exit 0 ;;
+  change-port) change_port; exit 0 ;;
 esac
 
 menu

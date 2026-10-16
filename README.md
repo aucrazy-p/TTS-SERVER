@@ -30,6 +30,8 @@ DOMAIN=你的域名 curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-S
 ./tts-server.sh logs        # 看日志
 ./tts-server.sh update      # 更新并重建
 ./tts-server.sh uninstall   # 卸载（保留 .env）
+./tts-server.sh change-port # 更改端口（菜单选 9 亦可），自动同步 Caddy 反代端口
+# 非交互：NEW_PORT=9090 ./tts-server.sh change-port
 ```
 
 ## 说明
