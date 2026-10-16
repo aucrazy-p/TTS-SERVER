@@ -10,7 +10,8 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh)
 ```
 
-> ⚠️ 不要写成 `curl ... | bash`：那样 stdin 是管道，菜单读不到输入。无人值守才用管道并带变量。
+> 推荐用上面的 `bash <(curl ...)` 写法（stdin 仍是终端，交互最稳）。
+> `curl ... | bash` 也能交互（菜单自动改从 /dev/tty 读取）；无人值守（无终端）必须用管道并带变量。
 
 菜单项：
 
