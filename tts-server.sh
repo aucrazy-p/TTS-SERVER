@@ -81,14 +81,54 @@ port_in_use(){
   fi
 }
 
+# 找一个空闲端口：从 $1 起向上扫描（最多 +200），找不到则取 30000-39999 随机高端口
+find_free_port(){
+  local start="$1" p=$1
+  while [ "$p" -le $((start+200)) ]; do
+    port_in_use "$p" || { echo "$p"; return 0; }
+    p=$((p+1))
+  done
+  p=$((30000 + (RANDOM % 10000)))
+  while port_in_use "$p"; do p=$((30000 + (RANDOM % 10000))); done
+  echo "$p"
+}
+
+# 端口检查 + 自动分配：
+#  - 端口空闲            -> 直接用
+#  - 端口被本服务容器占用 -> 复用该容器，继续
+#  - 端口被其他服务占用   -> 自动找一个空闲端口，写入 .env 并导出
 check_port(){
   local p; p=$(get_port)
-  if port_in_use "$p"; then
-    err "端口 $p 已被占用（可能被 s-ui / new-api / 其他服务占用）。"
-    err "请在 .env 里把 PORT 改成其他空闲端口后重试，例如："
-    err "  sed -i 's/^PORT=.*/PORT=9090/' .env && bash ./tts-server.sh install"
+  if ! port_in_use "$p"; then
+    return 0
+  fi
+  # 先看是不是本服务自己的容器（重跑安装/启动时常见）
+  if command -v docker >/dev/null 2>&1; then
+    local ports
+    ports=$($DCC ps --format '{{.Ports}}' 2>/dev/null)
+    if printf '%s\n' "$ports" | grep -qE "(^|[^0-9])${p}->"; then
+      info "端口 $p 由本服务容器占用，将复用该容器，继续..."
+      return 0
+    fi
+  fi
+  # 被其他服务占用：自动分配空闲端口
+  local np
+  np=$(find_free_port "$p")
+  if [ -z "$np" ] || [ "$np" = "$p" ]; then
+    err "端口 $p 被占用且无法自动分配空闲端口，请手动在 .env 修改 PORT 后重试"
     exit 1
   fi
+  info "端口 $p 已被其他服务占用，自动改用空闲端口 $np"
+  if [ -f "$ENV_FILE" ]; then
+    if grep -q '^PORT=' "$ENV_FILE"; then
+      sed -i "s/^PORT=.*/PORT=$np/" "$ENV_FILE"
+    else
+      printf 'PORT=%s\n' "$np" >> "$ENV_FILE"
+    fi
+  else
+    printf 'TTS_TOKEN=%s\nPORT=%s\n' "$(openssl rand -hex 16)" "$np" > "$ENV_FILE"
+  fi
+  export PORT="$np"
 }
 
 gen_env(){

@@ -10,13 +10,13 @@
 curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 ```
 
-脚本会自动完成：装 docker → 生成随机 `TTS_TOKEN` → 构建并启动服务（监听 `127.0.0.1:8080`）→ 询问对外访问方式 → 把你的域名反代写进 Caddyfile 并 `reload`（未装 Caddy 会自动装）。结束会输出 legado_NG 要填的「服务地址」（含 `?token=...`）。
+脚本会自动完成：装 docker → 生成随机 `TTS_TOKEN` → 构建并启动服务（默认监听 `127.0.0.1:8080`，**若 8080 被占用会自动分配一个空闲端口**）→ 询问对外访问方式 → 把你的域名反代写进 Caddyfile 并 `reload`（未装 Caddy 会自动装）。结束会输出 legado_NG 要填的「服务地址」（含 `?token=...`）。
 
 **前提**：选了 Caddy 反代时，域名需已解析到本机公网 IP（否则证书申请失败，配置仍会写进去）。
 
 无人值守 / 非交互（用环境变量跳过提问，变量必须写在 `bash` 这一侧）：
 - 自动配 Caddy 反代：`curl -fsSL .../deploy.sh | DOMAIN=你的域名 bash`
-- 改端口（如 8080 被 s-ui/new-api 占用）：`curl -fsSL .../deploy.sh | PORT=9090 bash`
+- 指定端口（否则默认 8080，被占则自动换空闲端口）：`curl -fsSL .../deploy.sh | PORT=9090 bash`
 
 ## 二、legado_NG 配置
 
@@ -37,6 +37,6 @@ curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh
 
 ## 说明
 
-- 服务只监听 `127.0.0.1`，VPS 防火墙无需开放 8080 端口。
+- 服务只监听 `127.0.0.1`，VPS 防火墙无需开放服务端口。若默认 8080 被占用，安装时自动改用其他空闲端口（见脚本输出）。
 - 对外暴露后建议保留 `TTS_TOKEN`，避免他人白嫖。
 - 共 39 个中文音色（与 legado_NG 内置默认一致）。

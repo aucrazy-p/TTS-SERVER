@@ -32,7 +32,7 @@ ENV_FILE=".env"
 echo "==> TTS-SERVER 一键部署"
 echo "    安装目录: $INSTALL_DIR"
 
-# 端口可覆盖 (默认 8080；若被 s-ui / new-api / 其他服务占用请改，如 PORT=9090)
+# 端口可覆盖 (默认 8080；若被占用安装时会自动分配一个空闲端口，无需手动改)
 export PORT="${PORT:-8080}"
 echo "    监听端口: $PORT"
 
@@ -66,6 +66,13 @@ cd "$INSTALL_DIR"
 # ---------- 2. 安装并启动 (本步不需要域名) ----------
 echo "==> 安装 docker / 构建镜像 / 启动服务 (本步不需要域名)..."
 bash ./tts-server.sh install
+
+# install 内部可能因端口冲突自动改了 PORT，重新读取以同步 Caddy 反代端口
+if [ -f "$ENV_FILE" ]; then
+  _p=$(grep '^PORT=' "$ENV_FILE" | head -1 | cut -d= -f2 | tr -d ' ')
+  [ -n "$_p" ] && PORT="$_p"
+fi
+echo "    监听端口: $PORT"
 
 # ---------- 3. 对外暴露（Caddy 反代）----------
 # 默认：安装/启动后，把域名反代写进 Caddyfile 并 reload（Caddy 未装会自动安装；域名需已指向 VPS）。
