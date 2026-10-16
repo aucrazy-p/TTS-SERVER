@@ -3,9 +3,11 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      - PORT=8080
+      # 容器内部监听端口，必须与下方映射的容器侧端口一致（默认 8080）
+      - PORT=${PORT:-8080}
       # 建议设置一个随机长字符串；Cloudflare 公网暴露时，NG 引擎 URL 里带 ?token= 这个值
       - TTS_TOKEN=${TTS_TOKEN:-}
-    # 只绑到宿主机回环地址，外部不可直接访问；cloudflared 在宿主机上连 127.0.0.1:8080
+    # 只绑到宿主机回环地址，外部不可直接访问；cloudflared 在宿主机上连 127.0.0.1:${PORT}
+    # 若 8080 被 s-ui/new-api/其他服务占用，改 .env 里的 PORT 即可（如 9090）
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${PORT:-8080}:${PORT:-8080}"

@@ -20,7 +20,7 @@ tts-server/
 ├── server.py                    # Flask 服务：/voices 发音人目录 + /tts SSML 合成
 ├── self-hosted-edge-tts.json   # 导入 legado_NG 的 TTS 引擎脚本
 ├── Dockerfile
-├── docker-compose.yml          # 仅映射 127.0.0.1:8080
+├── docker-compose.yml          # 仅映射 127.0.0.1:${PORT}（默认 8080，可改）
 ├── tts-server.sh               # 菜单式一键管理脚本
 ├── requirements.txt
 ├── .env.example
@@ -40,6 +40,20 @@ curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh
 > 想部署后顺带建 Cloudflare 隧道（仍需浏览器登录 Cloudflare 账号）：
 > `DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash`
 
+### 自定义端口
+
+默认监听 `127.0.0.1:8080`。若 VPS 上 **8080 已被 s-ui / new-api / 其他服务占用**，部署时指定 `PORT` 即可（部署后会自动检测占用并提示）：
+
+```bash
+PORT=9090 curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+```
+
+已安装的情况下改端口：把 `.env` 里的 `PORT` 改成空闲端口后重装/重启：
+
+```bash
+sed -i 's/^PORT=.*/PORT=9090/' .env && bash ./tts-server.sh install
+```
+
 ## 备选：手动 / 菜单
 
 ```bash
@@ -56,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh
 cloudflared tunnel login
 cloudflared tunnel create tts
 cloudflared tunnel route dns tts tts.你的域名.com
-cloudflared tunnel run --url http://localhost:8080 tts
+cloudflared tunnel run --url http://localhost:8080 tts   # 若改过 PORT，请对应改成 127.0.0.1:${PORT}
 ```
 
 ## legado_NG 配置

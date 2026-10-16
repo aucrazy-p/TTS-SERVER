@@ -6,8 +6,10 @@
 #     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   安装并自动建 Cloudflare 隧道(仍需在浏览器登录 Cloudflare):
 #     DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+#   自定义端口(若 8080 被 s-ui/new-api 占用，例如改用 9090):
+#     PORT=9090 curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #
-# 说明: 服务本身只监听 127.0.0.1:8080，安装阶段【不需要域名】。
+# 说明: 服务本身只监听 127.0.0.1:${PORT}，安装阶段【不需要域名】。
 #       域名仅在「想从手机 legado_NG 远程访问」时通过 Cloudflare 隧道使用。
 set -euo pipefail
 
@@ -25,6 +27,10 @@ fi
 
 echo "==> TTS-SERVER 一键部署"
 echo "    安装目录: $INSTALL_DIR"
+
+# 端口可覆盖 (默认 8080；若被 s-ui / new-api / 其他服务占用请改，如 PORT=9090)
+export PORT="${PORT:-8080}"
+echo "    监听端口: $PORT"
 
 SUDO=""
 [ "$(id -u)" -ne 0 ] && SUDO="sudo"
@@ -73,7 +79,7 @@ setup_tunnel(){
   fi
   cloudflared tunnel create tts
   cloudflared tunnel route dns tts "$domain"
-  nohup cloudflared tunnel run --url http://localhost:8080 tts >/var/log/cloudflared.log 2>&1 &
+  nohup cloudflared tunnel run --url "http://localhost:${PORT}" tts >/var/log/cloudflared.log 2>&1 &
   sleep 2
   echo "==> 隧道已启动 -> https://$domain"
   echo "    到 legado_NG 导入 self-hosted-edge-tts.json，服务地址填 https://$domain"
@@ -88,14 +94,14 @@ elif [ -t 0 ]; then
 else
   echo
   echo "-------------------------------------------"
-  echo "服务已在 127.0.0.1:8080 启动。如需从手机(legado_NG)远程访问，"
+  echo "服务已在 127.0.0.1:${PORT} 启动。如需从手机(legado_NG)远程访问，"
   echo "再配置 Cloudflare 隧道即可（本步不需要域名）："
   echo "  cloudflared tunnel login"
   echo "  cloudflared tunnel create tts"
   echo "  cloudflared tunnel route dns tts tts.你的域名.com"
-  echo "  cloudflared tunnel run --url http://localhost:8080 tts"
+  echo "  cloudflared tunnel run --url http://localhost:${PORT} tts"
   echo "然后到 legado_NG 导入 self-hosted-edge-tts.json，服务地址填 https://tts.你的域名.com"
   echo "-------------------------------------------"
 fi
 
-echo "==> 完成。服务运行在 127.0.0.1:8080"
+echo "==> 完成。服务运行在 127.0.0.1:${PORT}"

@@ -60,26 +60,58 @@ ensure_docker(){
   fi
 }
 
+get_port(){
+  local p
+  p=$(grep '^PORT=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2 | tr -d ' ')
+  case "$p" in
+    ''|*[!0-9]*) echo 8080 ;;
+    *) echo "$p" ;;
+  esac
+}
+
+port_in_use(){
+  local p="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"
+  elif command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"
+  else
+    return 1
+  fi
+}
+
+check_port(){
+  local p; p=$(get_port)
+  if port_in_use "$p"; then
+    err "端口 $p 已被占用（可能被 s-ui / new-api / 其他服务占用）。"
+    err "请在 .env 里把 PORT 改成其他空闲端口后重试，例如："
+    err "  sed -i 's/^PORT=.*/PORT=9090/' .env && bash ./tts-server.sh install"
+    exit 1
+  fi
+}
+
 gen_env(){
   if [ ! -f "$ENV_FILE" ]; then
-    local tok
+    local tok port
     tok=$(openssl rand -hex 16)
+    port="${PORT:-8080}"
     cat > "$ENV_FILE" <<EOF
 # Cloudflare 隧道公开暴露时强烈建议设置，legado_NG 引擎里填同样的 token
 TTS_TOKEN=$tok
-PORT=8080
+PORT=$port
 EOF
-    info "已生成 $ENV_FILE (TTS_TOKEN=$tok)"
+    info "已生成 $ENV_FILE (TTS_TOKEN=$tok, PORT=$port)"
   else
     info "$ENV_FILE 已存在，跳过生成"
   fi
 }
 
 show_url(){
-  local tok=""
+  local tok="" port
+  port=$(get_port)
   [ -f "$ENV_FILE" ] && tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" | cut -d= -f2)
   echo "----------------------------------------"
-  info "本地访问: http://127.0.0.1:8080"
+  info "本地访问: http://127.0.0.1:$port"
   [ -n "$tok" ] && info "TTS_TOKEN: $tok"
   echo "legado_NG 引擎服务地址示例: https://tts.你的域名.com${tok:+?token=$tok}"
   echo "----------------------------------------"
@@ -88,6 +120,7 @@ show_url(){
 install(){
   ensure_docker
   gen_env
+  check_port
   info "构建并启动服务 ($DCC up -d --build) ..."
   $DCC up -d --build
   show_url
@@ -102,7 +135,7 @@ uninstall(){
   info "已卸载（容器/镜像已移除，$ENV_FILE 保留以便重装）"
 }
 
-start(){ $DCC up -d; info "已启动"; }
+start(){ check_port; $DCC up -d; info "已启动"; }
 stop(){ $DCC stop; info "已停止"; }
 
 status(){
@@ -121,11 +154,12 @@ update(){
 }
 
 tunnel_help(){
+  local port; port=$(get_port)
   echo "Cloudflare 隧道（VPS 防火墙零开放端口）："
   echo "  cloudflared tunnel login"
   echo "  cloudflared tunnel create tts"
   echo "  cloudflared tunnel route dns tts tts.你的域名.com"
-  echo "  cloudflared tunnel run --url http://localhost:8080 tts"
+  echo "  cloudflared tunnel run --url http://localhost:$port tts"
   echo "然后在 legado_NG 导入 self-hosted-edge-tts.json，"
   echo "把\"服务地址\"改成 https://tts.你的域名.com（设了 token 就加 ?token=...）"
 }
