@@ -2,14 +2,17 @@
 # TTS-SERVER 一键部署
 #
 # 用法（仓库已设为 public，可直接拉取）:
-#   基础安装:
+#   基础安装(无域名时不自动配反代，仅本地 127.0.0.1:8080):
 #     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   安装并自动配置 Caddy 反代(写 Caddyfile + reload; 若 VPS 未装 Caddy 会自动安装; 需域名已指向 VPS):
-#     DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | DOMAIN=tts.example.com bash
 #   改用 Cloudflare 隧道(零开放端口, 需浏览器登录 Cloudflare):
-#     TUNNEL=1 DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | TUNNEL=1 DOMAIN=tts.example.com bash
 #   自定义端口(若 8080 被 s-ui/new-api 占用，例如改用 9090):
-#     PORT=9090 curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | PORT=9090 bash
+#
+# ⚠️ 环境变量(DOMAIN/PORT/TUNNEL)必须放在 bash 一侧，不能放在 curl 一侧——
+#    `VAR=val curl | bash` 中 VAR 只传给 curl，脚本收不到，会自动退回手动配置。
 #
 # 说明: 服务只监听 127.0.0.1:${PORT}。手机要连需对外暴露，默认自动配置 Caddy 反代
 #       (把域名写进 Caddyfile 并 reload)。也可 TUNNEL=1 走 Cloudflare 隧道(零开放端口)。

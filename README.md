@@ -9,13 +9,15 @@
 在 VPS 上执行：
 
 ```bash
-DOMAIN=你的域名 curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | DOMAIN=你的域名 bash
 ```
+
+> ⚠️ 环境变量（DOMAIN/PORT/TUNNEL）必须写在 `bash` 这一侧，不能写在 `curl` 那侧——`VAR=val curl | bash` 里 VAR 只传给 curl、脚本收不到，会自动退回手动配置。
 
 脚本自动完成：装 docker → 生成随机 `TTS_TOKEN` → 构建并启动服务（监听 `127.0.0.1:8080`）→ 把你的域名反代写进 Caddyfile 并 `reload`。结束会输出 legado_NG 要填的「服务地址」（含 `?token=...`）。
 
-- 改端口（如 8080 被占用）：`PORT=9090 DOMAIN=你的域名 curl ... | bash`
-- 用 Cloudflare 隧道（零开放端口）：`TUNNEL=1 DOMAIN=你的域名 curl ... | bash`
+- 改端口（如 8080 被占用）：`curl -fsSL ... | PORT=9090 DOMAIN=你的域名 bash`
+- 用 Cloudflare 隧道（零开放端口）：`curl -fsSL ... | TUNNEL=1 DOMAIN=你的域名 bash`
 
 ## 二、legado_NG 配置
 
