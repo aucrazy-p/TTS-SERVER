@@ -3,7 +3,7 @@
 # 用法:
 #   交互菜单:  ./tts-server.sh
 #   一键安装:  ./tts-server.sh install   (可用于 curl|bash 非交互)
-#   更改端口:  NEW_PORT=9090 ./tts-server.sh change-port   (或菜单选 9)
+#   更改端口:  NEW_PORT=9090 ./tts-server.sh change-port   (或菜单选 8)
 #   查看状态:  ./tts-server.sh status
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -122,8 +122,13 @@ install(){
   ensure_docker
   gen_env
   check_port
-  info "构建并启动服务 ($DCC up -d --build) ..."
-  $DCC up -d --build
+  if docker image inspect tts-server-tts >/dev/null 2>&1; then
+    info "镜像已存在，直接启动 ($DCC up -d) ..."
+    $DCC up -d
+  else
+    info "首次构建并启动服务 ($DCC up -d --build) ..."
+    $DCC up -d --build
+  fi
   show_url
 }
 
@@ -152,17 +157,6 @@ update(){
   git pull || warn "非 git 目录或 pull 失败，跳过更新源码"
   $DCC up -d --build
   info "更新完成"
-}
-
-tunnel_help(){
-  local port; port=$(get_port)
-  echo "Cloudflare 隧道（VPS 防火墙零开放端口）："
-  echo "  cloudflared tunnel login"
-  echo "  cloudflared tunnel create tts"
-  echo "  cloudflared tunnel route dns tts tts.你的域名.com"
-  echo "  cloudflared tunnel run --url http://localhost:$port tts"
-  echo "然后在 legado_NG 导入 self-hosted-edge-tts.json，"
-  echo "把\"服务地址\"改成 https://tts.你的域名.com（设了 token 就加 ?token=...）"
 }
 
 # 定位 Caddyfile（优先 systemd --config，否则常见路径）
@@ -259,8 +253,7 @@ menu(){
     echo " 5) 状态 status"
     echo " 6) 查看日志 logs"
     echo " 7) 更新 update"
-    echo " 8) Cloudflare 隧道指引 tunnel"
-    echo " 9) 更改端口 change-port"
+    echo " 8) 更改端口 change-port"
     echo " 0) 退出"
     read -rp "请选择 [0-9]: " c
     case "$c" in
@@ -271,8 +264,7 @@ menu(){
       5) status ;;
       6) logs ;;
       7) update ;;
-      8) tunnel_help ;;
-      9) change_port ;;
+      8) change_port ;;
       0) exit 0 ;;
       *) warn "无效选择" ;;
     esac

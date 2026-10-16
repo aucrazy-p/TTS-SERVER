@@ -4,20 +4,19 @@
 
 ## 一、VPS 一键部署
 
-**前提**：你的域名已解析到 VPS 公网 IP（若 VPS 未装 Caddy，脚本会自动安装并配置）。
-
-在 VPS 上执行：
+在 VPS 上执行（**交互式**：运行时会弹菜单问你是否配置反代，并让你输入域名）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | DOMAIN=你的域名 bash
+curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 ```
 
-> ⚠️ 环境变量（DOMAIN/PORT/TUNNEL）必须写在 `bash` 这一侧，不能写在 `curl` 那侧——`VAR=val curl | bash` 里 VAR 只传给 curl、脚本收不到，会自动退回手动配置。
+脚本会自动完成：装 docker → 生成随机 `TTS_TOKEN` → 构建并启动服务（监听 `127.0.0.1:8080`）→ 询问对外访问方式 → 把你的域名反代写进 Caddyfile 并 `reload`（未装 Caddy 会自动装）。结束会输出 legado_NG 要填的「服务地址」（含 `?token=...`）。
 
-脚本自动完成：装 docker → 生成随机 `TTS_TOKEN` → 构建并启动服务（监听 `127.0.0.1:8080`）→ 把你的域名反代写进 Caddyfile 并 `reload`。结束会输出 legado_NG 要填的「服务地址」（含 `?token=...`）。
+**前提**：选了 Caddy 反代时，域名需已解析到本机公网 IP（否则证书申请失败，配置仍会写进去）。
 
-- 改端口（如 8080 被占用）：`curl -fsSL ... | PORT=9090 DOMAIN=你的域名 bash`
-- 用 Cloudflare 隧道（零开放端口）：`curl -fsSL ... | TUNNEL=1 DOMAIN=你的域名 bash`
+无人值守 / 非交互（用环境变量跳过提问，变量必须写在 `bash` 这一侧）：
+- 自动配 Caddy 反代：`curl -fsSL .../deploy.sh | DOMAIN=你的域名 bash`
+- 改端口（如 8080 被 s-ui/new-api 占用）：`curl -fsSL .../deploy.sh | PORT=9090 bash`
 
 ## 二、legado_NG 配置
 
@@ -32,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh
 ./tts-server.sh logs        # 看日志
 ./tts-server.sh update      # 更新并重建
 ./tts-server.sh uninstall   # 卸载（保留 .env）
-./tts-server.sh change-port # 更改端口（菜单选 9 亦可），自动同步 Caddy 反代端口
+./tts-server.sh change-port # 更改端口（菜单选 8 亦可），自动同步 Caddy 反代端口
 # 非交互：NEW_PORT=9090 ./tts-server.sh change-port
 ```
 

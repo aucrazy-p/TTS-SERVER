@@ -2,20 +2,17 @@
 # TTS-SERVER 一键部署
 #
 # 用法（仓库已设为 public，可直接拉取）:
-#   基础安装(无域名时不自动配反代，仅本地 127.0.0.1:8080):
+#   交互安装（推荐）：运行时弹菜单询问是否配置 Caddy 反代，并让你输入域名，无需预先写变量
 #     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
-#   安装并自动配置 Caddy 反代(写 Caddyfile + reload; 若 VPS 未装 Caddy 会自动安装; 需域名已指向 VPS):
-#     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | DOMAIN=tts.example.com bash
-#   改用 Cloudflare 隧道(零开放端口, 需浏览器登录 Cloudflare):
-#     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | TUNNEL=1 DOMAIN=tts.example.com bash
-#   自定义端口(若 8080 被 s-ui/new-api 占用，例如改用 9090):
-#     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | PORT=9090 bash
+#   非交互/无人值守：用环境变量跳过提问（⚠️ 变量必须写在 bash 一侧，不能写在 curl 一侧）
+#     curl -fsSL .../deploy.sh | DOMAIN=tts.example.com bash   # 自动配 Caddy 反代
+#     curl -fsSL .../deploy.sh | PORT=9090 bash                # 改端口(如被 s-ui/new-api 占用)
 #
-# ⚠️ 环境变量(DOMAIN/PORT/TUNNEL)必须放在 bash 一侧，不能放在 curl 一侧——
-#    `VAR=val curl | bash` 中 VAR 只传给 curl，脚本收不到，会自动退回手动配置。
+# 交互模式下会让你选「Caddy 反代 / 暂不对外」并在安装过程中输入域名；
+# 域名需已解析到本机公网 IP。服务只监听 127.0.0.1:${PORT}。
 #
 # 说明: 服务只监听 127.0.0.1:${PORT}。手机要连需对外暴露，默认自动配置 Caddy 反代
-#       (把域名写进 Caddyfile 并 reload)。也可 TUNNEL=1 走 Cloudflare 隧道(零开放端口)。
+#       (把域名写进 Caddyfile 并 reload；Caddy 未装会自动安装)。
 set -euo pipefail
 
 REPO_URL="https://github.com/aucrazy-p/TTS-SERVER.git"
@@ -70,36 +67,8 @@ cd "$INSTALL_DIR"
 echo "==> 安装 docker / 构建镜像 / 启动服务 (本步不需要域名)..."
 bash ./tts-server.sh install
 
-# ---------- 3. (可选) Cloudflare 隧道 ----------
-setup_tunnel(){
-  local domain="${1:-}"
-  echo "==> 安装 cloudflared ..."
-  local cfarch="amd64"
-  case "$(uname -m)" in
-    x86_64)  cfarch="amd64" ;;
-    aarch64) cfarch="arm64" ;;
-  esac
-  $SUDO curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$cfarch" -o /usr/local/bin/cloudflared
-  $SUDO chmod +x /usr/local/bin/cloudflared
-
-  echo "==> 请在浏览器打开下方链接完成 Cloudflare 登录:"
-  cloudflared tunnel login
-
-  if [ -z "$domain" ]; then
-    read -rp "输入要绑定的域名 (如 tts.example.com): " domain
-  fi
-  cloudflared tunnel create tts
-  cloudflared tunnel route dns tts "$domain"
-  nohup cloudflared tunnel run --url "http://localhost:${PORT}" tts >/var/log/cloudflared.log 2>&1 &
-  sleep 2
-  echo "==> 隧道已启动 -> https://$domain"
-  echo "    到 legado_NG 导入 self-hosted-edge-tts.json，服务地址填 https://$domain"
-  echo "    (设为开机自启: cloudflared service install)"
-}
-
-# ---------- 3. 对外暴露 ----------
-# 默认：自动把域名反代写进 Caddyfile 并 reload（Caddy 未装会自动安装；域名需已指向 VPS）。
-# 备选：Cloudflare 隧道（零开放端口），设置 TUNNEL=1 启用（仍需浏览器登录）。
+# ---------- 3. 对外暴露（Caddy 反代）----------
+# 默认：安装/启动后，把域名反代写进 Caddyfile 并 reload（Caddy 未装会自动安装；域名需已指向 VPS）。
 
 # 端口占用检测（判断是否已有 Nginx/Caddy 占 80/443）
 port_in_use(){
@@ -244,22 +213,37 @@ EOF
   echo "-------------------------------------------"
 }
 
-if [ "${TUNNEL:-0}" = "1" ]; then
-  setup_tunnel "${DOMAIN:-}"
+# 交互检测：curl|bash 时 stdin 是管道，改用 /dev/tty 读终端；无终端则回退非交互
+have_tty(){ [ -t 0 ] || [ -c /dev/tty ]; }
+prompt(){
+  local q="$1" def="$2" ans
+  if have_tty; then read -r -p "$q${def:+ [$def]}: " ans < /dev/tty
+  else read -r -p "$q${def:+ [$def]}: " ans; fi
+  printf '%s' "${ans:-$def}"
+}
+
+SKIP_EXPOSE=0
+if have_tty && [ -z "${DOMAIN:-}" ]; then
+  echo
+  echo "====== 对外访问配置（手机才能连）======"
+  echo "1) Caddy 反代（推荐：自动写 Caddyfile + reload；未装 Caddy 会自动装）"
+  echo "2) 暂不对外（仅本机/局域网可用）"
+  m=$(prompt "请选择 [1]" "1")
+  case "$m" in
+    2) SKIP_EXPOSE=1 ;;
+    *) : ;;
+  esac
+fi
+
+if [ "$SKIP_EXPOSE" = "1" ]; then
+  echo "==> 已跳过对外访问配置（如需后再配，重跑本脚本选 1 或手动改 Caddyfile）"
 elif [ -n "${DOMAIN:-}" ]; then
   setup_caddy "$DOMAIN"
-elif [ -t 0 ]; then
-  echo "如何对外暴露（手机才能连）："
-  echo "  1) Caddy 反代（默认，自动写 Caddyfile 并 reload；Caddy 未装会自动装，需域名指向 VPS）"
-  echo "  2) Cloudflare 隧道（零开放端口，需浏览器登录 Cloudflare）"
-  read -rp "选择 [1/2] (默认1): " m
-  if [ "$m" = "2" ]; then
-    setup_tunnel
-  else
-    setup_caddy
-  fi
+elif have_tty; then
+  DOMAIN_SET=$(prompt "请输入你的公网域名（如 tts.example.com，需已解析到本机 IP）" "")
+  if [ -n "$DOMAIN_SET" ]; then setup_caddy "$DOMAIN_SET"
+  else echo "未输入域名，跳过对外暴露（之后可重跑或手动加 Caddyfile）"; fi
 else
-  # 非交互未给域名：仅打印片段，不自动改配置
   print_caddy
 fi
 
