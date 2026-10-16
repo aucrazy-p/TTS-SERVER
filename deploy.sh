@@ -4,15 +4,15 @@
 # 用法（仓库已设为 public，可直接拉取）:
 #   基础安装:
 #     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
-#   安装并直接生成 Caddy/Nginx 反代片段(用你的公网域名, 如已把 tts.xxx.org 指向 VPS):
+#   安装并自动配置 Caddy 反代(写 Caddyfile + reload, 需 Caddy 已装且你的域名已指向 VPS):
 #     DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   改用 Cloudflare 隧道(零开放端口, 需浏览器登录 Cloudflare):
 #     TUNNEL=1 DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   自定义端口(若 8080 被 s-ui/new-api 占用，例如改用 9090):
 #     PORT=9090 curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #
-# 说明: 服务只监听 127.0.0.1:${PORT}。手机要连，需对外暴露：
-#       推荐用你已有的 Caddy/Nginx 反代(脚本会打印片段)；或选 Cloudflare 隧道(零开放端口)。
+# 说明: 服务只监听 127.0.0.1:${PORT}。手机要连需对外暴露，默认自动配置 Caddy 反代
+#       (把域名写进 Caddyfile 并 reload)。也可 TUNNEL=1 走 Cloudflare 隧道(零开放端口)。
 set -euo pipefail
 
 REPO_URL="https://github.com/aucrazy-p/TTS-SERVER.git"
@@ -91,50 +91,110 @@ setup_tunnel(){
 }
 
 # ---------- 3. 对外暴露 ----------
-# 默认推荐：用你已有的 Caddy/Nginx 反代（把你的域名解析到 VPS 公网 IP 即可）。
-# 备选：Cloudflare 隧道（零开放端口），设置 TUNNEL=1 启用。
+# 默认：自动把域名反代写进 Caddyfile 并 reload（需 Caddy 已装、域名已指向 VPS）。
+# 备选：Cloudflare 隧道（零开放端口），设置 TUNNEL=1 启用（仍需浏览器登录）。
 
+# 仅在无法自动改 Caddyfile 时回退：把片段打印并写入文件供手动加。
 print_caddy(){
-  local domain="${1:-tts.你的域名.com}"
-  local port="$PORT"
+  local domain="${1:-tts.example.com}"
   local tok=""
   [ -f "$ENV_FILE" ] && tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" | cut -d= -f2)
   cat > "$INSTALL_DIR/caddy-snippet.txt" <<EOF
 # 把下面这段加到你的 Caddyfile，然后执行  caddy reload  （或 systemctl restart caddy）
 $domain {
-    reverse_proxy 127.0.0.1:$port
+    reverse_proxy 127.0.0.1:$PORT
 }
 EOF
   echo "-------------------------------------------"
-  echo "在 Caddy 中加入以下站点（反代到本机 $port），然后 reload Caddy："
+  echo "请手动在 Caddy 中加入以下站点（反代到本机 $PORT），然后 reload Caddy："
   echo
   echo "    $domain {"
-  echo "        reverse_proxy 127.0.0.1:$port"
+  echo "        reverse_proxy 127.0.0.1:$PORT"
   echo "    }"
   echo
   echo "legado_NG 引擎『服务地址』填： https://$domain${tok:+?token=$tok}"
-  echo "Caddy 会自动签发 HTTPS 证书；服务本身只监听 127.0.0.1，VPS 无需开放 $port 端口。"
-  echo "（片段已同时写入 $INSTALL_DIR/caddy-snippet.txt 方便复制）"
+  echo "（片段已写入 $INSTALL_DIR/caddy-snippet.txt）"
+  echo "-------------------------------------------"
+}
+
+# 自动定位 Caddyfile -> 备份 -> 追加域名反代块 -> reload（幂等）。
+setup_caddy(){
+  local domain="${1:-}"
+  [ -z "$domain" ] && read -rp "输入你的公网域名 (如 tts.example.com): " domain
+  [ -z "$domain" ] && { err "未提供域名，跳过对外暴露"; return; }
+
+  if ! command -v caddy >/dev/null 2>&1; then
+    warn "未检测到 caddy，无法自动写入反代，改为打印片段："
+    print_caddy "$domain"; return
+  fi
+
+  # 定位 Caddyfile
+  local cf=""
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files caddy.service >/dev/null 2>&1; then
+    cf=$(systemctl show caddy.service -p ExecStart --value 2>/dev/null | grep -oE '(^| )--config[= ]\S+' | head -1 | sed -E 's/.*--config[= ]//')
+  fi
+  if [ -z "$cf" ]; then
+    for p in /etc/caddy/Caddyfile /usr/local/etc/caddy/Caddyfile "$HOME/Caddyfile" /etc/caddy/caddy.json; do
+      [ -f "$p" ] && cf="$p" && break
+    done
+  fi
+  if [ -z "$cf" ]; then
+    warn "未找到 Caddyfile，改为打印片段："; print_caddy "$domain"; return
+  fi
+  # JSON 配置无法直接追加 Caddyfile 片段
+  if head -c1 "$cf" | grep -q '{'; then
+    warn "检测到 Caddy 使用 JSON 配置，自动写入不适用，改为打印片段："
+    print_caddy "$domain"; return
+  fi
+
+  # 备份
+  cp "$cf" "${cf}.bak.$(date +%s)"
+  # 已含该域名则跳过
+  if grep -q "$domain {" "$cf"; then
+    info "Caddyfile 已含 $domain，跳过重复写入"
+  else
+    cat >> "$cf" <<EOF
+
+# >>> Added by TTS-SERVER deploy $(date +%F) <<<
+$domain {
+    reverse_proxy 127.0.0.1:$PORT
+}
+# >>> end TTS-SERVER <<<
+EOF
+    info "已向 $cf 追加 $domain 反代配置（原文件已备份为 ${cf}.bak.*）"
+  fi
+  # reload
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; then
+    systemctl reload caddy && info "caddy 已 reload" || warn "caddy reload 失败，请手动执行: caddy reload"
+  else
+    caddy reload --config "$cf" >/dev/null 2>&1 && info "caddy 已 reload" || warn "caddy reload 失败，请手动执行: caddy reload"
+  fi
+
+  local tok=""
+  [ -f "$ENV_FILE" ] && tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" | cut -d= -f2)
+  echo "-------------------------------------------"
+  echo "✓ 对外暴露已配置： https://$domain${tok:+?token=$tok}"
+  echo "  到 legado_NG 导入 self-hosted-edge-tts.json，服务地址填上面的 URL"
   echo "-------------------------------------------"
 }
 
 if [ "${TUNNEL:-0}" = "1" ]; then
   setup_tunnel "${DOMAIN:-}"
 elif [ -n "${DOMAIN:-}" ]; then
-  print_caddy "$DOMAIN"
+  setup_caddy "$DOMAIN"
 elif [ -t 0 ]; then
   echo "如何对外暴露（手机才能连）："
-  echo "  1) Caddy/Nginx 反代 (推荐，把你的域名指向 VPS 即可)"
-  echo "  2) Cloudflare 隧道 (零开放端口，需浏览器登录 Cloudflare)"
+  echo "  1) Caddy 反代（默认，自动写 Caddyfile 并 reload；需 Caddy 已装且域名指向 VPS）"
+  echo "  2) Cloudflare 隧道（零开放端口，需浏览器登录 Cloudflare）"
   read -rp "选择 [1/2] (默认1): " m
   if [ "$m" = "2" ]; then
     setup_tunnel
   else
-    read -rp "输入你的公网域名 (如 tts.example.com): " d
-    print_caddy "$d"
+    setup_caddy
   fi
 else
-  print_caddy   # 非交互默认给 Caddy 片段（占位域名，用户自行替换）
+  # 非交互未给域名：仅打印片段，不自动改配置
+  print_caddy
 fi
 
 echo "==> 完成。TTS 服务运行在 127.0.0.1:${PORT}"
