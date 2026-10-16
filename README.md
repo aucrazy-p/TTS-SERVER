@@ -16,6 +16,7 @@
 
 ```
 tts-server/
+├── deploy.sh                   # 一键部署脚本（curl|bash 直接拉取运行）
 ├── server.py                    # Flask 服务：/voices 发音人目录 + /tts SSML 合成
 ├── self-hosted-edge-tts.json   # 导入 legado_NG 的 TTS 引擎脚本
 ├── Dockerfile
@@ -26,17 +27,28 @@ tts-server/
 └── README.md
 ```
 
-## 快速开始（VPS 上）
+## 一键部署（推荐）
+
+仓库已设为 **public**，直接在 VPS 上执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+```
+
+脚本会自动：获取项目文件 → 安装 docker（若缺）→ 生成随机 `TTS_TOKEN` → 构建并启动服务（监听 `127.0.0.1:8080`）。**安装阶段不需要域名。**
+
+> 想部署后顺带建 Cloudflare 隧道（仍需浏览器登录 Cloudflare 账号）：
+> `DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash`
+
+## 备选：手动 / 菜单
 
 ```bash
 # 方式一：菜单交互
 ./tts-server.sh          # 选 1 安装
 
-# 方式二：一键非交互（适合 curl|bash）
+# 方式二：一键非交互
 ./tts-server.sh install
 ```
-
-脚本会自动：检测/安装 docker → 生成随机 `TTS_TOKEN` → 构建并启动服务。
 
 ## 暴露到公网（Cloudflare Tunnel，零开放端口）
 
