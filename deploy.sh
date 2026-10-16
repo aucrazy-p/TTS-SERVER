@@ -4,7 +4,7 @@
 # 用法（仓库已设为 public，可直接拉取）:
 #   基础安装:
 #     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
-#   安装并自动配置 Caddy 反代(写 Caddyfile + reload, 需 Caddy 已装且你的域名已指向 VPS):
+#   安装并自动配置 Caddy 反代(写 Caddyfile + reload; 若 VPS 未装 Caddy 会自动安装; 需域名已指向 VPS):
 #     DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   改用 Cloudflare 隧道(零开放端口, 需浏览器登录 Cloudflare):
 #     TUNNEL=1 DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
@@ -38,6 +38,10 @@ echo "    监听端口: $PORT"
 
 SUDO=""
 [ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
+info(){ echo "[INFO] $*"; }
+warn(){ echo "[WARN] $*"; }
+err(){ echo "[ERROR] $*"; }
 
 # ---------- 1. 获取项目文件 ----------
 echo "==> 获取项目文件..."
@@ -91,8 +95,62 @@ setup_tunnel(){
 }
 
 # ---------- 3. 对外暴露 ----------
-# 默认：自动把域名反代写进 Caddyfile 并 reload（需 Caddy 已装、域名已指向 VPS）。
+# 默认：自动把域名反代写进 Caddyfile 并 reload（Caddy 未装会自动安装；域名需已指向 VPS）。
 # 备选：Cloudflare 隧道（零开放端口），设置 TUNNEL=1 启用（仍需浏览器登录）。
+
+# 端口占用检测（判断是否已有 Nginx/Caddy 占 80/443）
+port_in_use(){
+  local p="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn 2>/dev/null | grep -q ":$p "
+  else
+    (exec 3<>"/dev/tcp/127.0.0.1/$p") 2>/dev/null
+  fi
+}
+
+# 自动安装 Caddy（静态二进制 + systemd），未安装时调用
+install_caddy(){
+  info "未检测到 caddy，开始自动安装..."
+  local arch="amd64"
+  case "$(uname -m)" in
+    x86_64)  arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+  esac
+  $SUDO curl -fsSL "https://github.com/caddyserver/caddy/releases/latest/download/caddy_linux_${arch}.tar.gz" -o /tmp/caddy.tar.gz \
+    || { err "下载 Caddy 失败（无网络？）"; return 1; }
+  $SUDO tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin/ caddy \
+    || { err "解压 Caddy 失败"; return 1; }
+  $SUDO chmod +x /usr/local/bin/caddy
+  $SUDO mkdir -p /etc/caddy
+  if [ ! -f /etc/caddy/Caddyfile ]; then
+    $SUDO tee /etc/caddy/Caddyfile >/dev/null <<'EOF'
+{
+    # Caddy 全局选项（如需证书到期通知可填 email）
+}
+EOF
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    $SUDO tee /etc/systemd/system/caddy.service >/dev/null <<'EOF'
+[Unit]
+Description=Caddy
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    $SUDO systemctl daemon-reload
+    $SUDO systemctl enable --now caddy || warn "caddy 启动失败，请检查 80/443 是否被占用"
+  else
+    $SUDO caddy start --config /etc/caddy/Caddyfile || warn "caddy 启动失败"
+  fi
+  command -v caddy >/dev/null 2>&1
+}
 
 # 仅在无法自动改 Caddyfile 时回退：把片段打印并写入文件供手动加。
 print_caddy(){
@@ -124,8 +182,13 @@ setup_caddy(){
   [ -z "$domain" ] && { err "未提供域名，跳过对外暴露"; return; }
 
   if ! command -v caddy >/dev/null 2>&1; then
-    warn "未检测到 caddy，无法自动写入反代，改为打印片段："
-    print_caddy "$domain"; return
+    if port_in_use 80 || port_in_use 443; then
+      warn "检测到 80/443 已被其他服务占用（可能已跑 Nginx/Caddy），不再重复安装 Caddy，避免冲突。"
+      warn "请把下面片段加进你现有的反代配置："
+      print_caddy "$domain"; return
+    fi
+    warn "未检测到 caddy，尝试自动安装..."
+    install_caddy || { warn "caddy 安装失败，改为打印片段："; print_caddy "$domain"; return; }
   fi
 
   # 定位 Caddyfile
@@ -184,7 +247,7 @@ elif [ -n "${DOMAIN:-}" ]; then
   setup_caddy "$DOMAIN"
 elif [ -t 0 ]; then
   echo "如何对外暴露（手机才能连）："
-  echo "  1) Caddy 反代（默认，自动写 Caddyfile 并 reload；需 Caddy 已装且域名指向 VPS）"
+  echo "  1) Caddy 反代（默认，自动写 Caddyfile 并 reload；Caddy 未装会自动装，需域名指向 VPS）"
   echo "  2) Cloudflare 隧道（零开放端口，需浏览器登录 Cloudflare）"
   read -rp "选择 [1/2] (默认1): " m
   if [ "$m" = "2" ]; then
