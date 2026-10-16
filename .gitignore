@@ -7,3 +7,6 @@ venv/
 # 系统
 .DS_Store
 *.log
+
+# 生成的部署片段
+caddy-snippet.txt

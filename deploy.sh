@@ -2,15 +2,17 @@
 # TTS-SERVER 一键部署
 #
 # 用法（仓库已设为 public，可直接拉取）:
-#   基础安装(无需域名):
+#   基础安装:
 #     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
-#   安装并自动建 Cloudflare 隧道(仍需在浏览器登录 Cloudflare):
-#     DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+#   安装并直接生成 Caddy/Nginx 反代片段(用你的公网域名, 如已把 tts.xxx.org 指向 VPS):
+#     DOMAIN=tts.aucrazy.dpdns.org curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+#   改用 Cloudflare 隧道(零开放端口, 需浏览器登录 Cloudflare):
+#     TUNNEL=1 DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   自定义端口(若 8080 被 s-ui/new-api 占用，例如改用 9090):
 #     PORT=9090 curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #
-# 说明: 服务本身只监听 127.0.0.1:${PORT}，安装阶段【不需要域名】。
-#       域名仅在「想从手机 legado_NG 远程访问」时通过 Cloudflare 隧道使用。
+# 说明: 服务只监听 127.0.0.1:${PORT}。手机要连，需对外暴露：
+#       推荐用你已有的 Caddy/Nginx 反代(脚本会打印片段)；或选 Cloudflare 隧道(零开放端口)。
 set -euo pipefail
 
 REPO_URL="https://github.com/aucrazy-p/TTS-SERVER.git"
@@ -24,6 +26,8 @@ elif [ "$(id -u)" -eq 0 ]; then
 else
   INSTALL_DIR="$HOME/tts-server"
 fi
+
+ENV_FILE=".env"
 
 echo "==> TTS-SERVER 一键部署"
 echo "    安装目录: $INSTALL_DIR"
@@ -86,22 +90,51 @@ setup_tunnel(){
   echo "    (设为开机自启: cloudflared service install)"
 }
 
-if [ -n "${DOMAIN:-}" ]; then
-  setup_tunnel "$DOMAIN"
-elif [ -t 0 ]; then
-  read -rp "是否现在配置 Cloudflare 隧道(需浏览器登录 Cloudflare)? (y/N): " ans
-  [[ "$ans" == [yY] ]] && setup_tunnel
-else
+# ---------- 3. 对外暴露 ----------
+# 默认推荐：用你已有的 Caddy/Nginx 反代（你已用 tts.aucrazy.dpdns.org 指向 VPS）。
+# 备选：Cloudflare 隧道（零开放端口），设置 TUNNEL=1 启用。
+
+print_caddy(){
+  local domain="${1:-tts.你的域名.com}"
+  local port="$PORT"
+  local tok=""
+  [ -f "$ENV_FILE" ] && tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" | cut -d= -f2)
+  cat > "$INSTALL_DIR/caddy-snippet.txt" <<EOF
+# 把下面这段加到你的 Caddyfile，然后执行  caddy reload  （或 systemctl restart caddy）
+$domain {
+    reverse_proxy 127.0.0.1:$port
+}
+EOF
+  echo "-------------------------------------------"
+  echo "在 Caddy 中加入以下站点（反代到本机 $port），然后 reload Caddy："
   echo
+  echo "    $domain {"
+  echo "        reverse_proxy 127.0.0.1:$port"
+  echo "    }"
+  echo
+  echo "legado_NG 引擎『服务地址』填： https://$domain${tok:+?token=$tok}"
+  echo "Caddy 会自动签发 HTTPS 证书；服务本身只监听 127.0.0.1，VPS 无需开放 $port 端口。"
+  echo "（片段已同时写入 $INSTALL_DIR/caddy-snippet.txt 方便复制）"
   echo "-------------------------------------------"
-  echo "服务已在 127.0.0.1:${PORT} 启动。如需从手机(legado_NG)远程访问，"
-  echo "再配置 Cloudflare 隧道即可（本步不需要域名）："
-  echo "  cloudflared tunnel login"
-  echo "  cloudflared tunnel create tts"
-  echo "  cloudflared tunnel route dns tts tts.你的域名.com"
-  echo "  cloudflared tunnel run --url http://localhost:${PORT} tts"
-  echo "然后到 legado_NG 导入 self-hosted-edge-tts.json，服务地址填 https://tts.你的域名.com"
-  echo "-------------------------------------------"
+}
+
+if [ "${TUNNEL:-0}" = "1" ]; then
+  setup_tunnel "${DOMAIN:-}"
+elif [ -n "${DOMAIN:-}" ]; then
+  print_caddy "$DOMAIN"
+elif [ -t 0 ]; then
+  echo "如何对外暴露（手机才能连）："
+  echo "  1) Caddy/Nginx 反代 (推荐，你已用 tts.aucrazy.dpdns.org 指向 VPS)"
+  echo "  2) Cloudflare 隧道 (零开放端口，需浏览器登录 Cloudflare)"
+  read -rp "选择 [1/2] (默认1): " m
+  if [ "$m" = "2" ]; then
+    setup_tunnel
+  else
+    read -rp "输入你的公网域名 (如 tts.aucrazy.dpdns.org): " d
+    print_caddy "$d"
+  fi
+else
+  print_caddy   # 非交互默认给 Caddy 片段（占位域名，用户自行替换）
 fi
 
-echo "==> 完成。服务运行在 127.0.0.1:${PORT}"
+echo "==> 完成。TTS 服务运行在 127.0.0.1:${PORT}"

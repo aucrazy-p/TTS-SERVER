@@ -64,7 +64,40 @@ sed -i 's/^PORT=.*/PORT=9090/' .env && bash ./tts-server.sh install
 ./tts-server.sh install
 ```
 
-## 暴露到公网（Cloudflare Tunnel，零开放端口）
+## 暴露到公网（手机才能连）
+
+服务只监听 `127.0.0.1:${PORT}`，要手机访问必须对外暴露。两种主流方式：
+
+### 方式一：Caddy / Nginx 反代（推荐，若你已有反代）
+
+把域名（如 `tts.aucrazy.dpdns.org`，需先解析到 VPS 公网 IP）反代到本机 `${PORT}` 即可，HTTPS 由 Caddy 自动签发，VPS **无需开放 `${PORT}` 端口**（只用到 80/443，Caddy 已在跑）。
+
+**Caddy 片段：**
+```caddy
+tts.aucrazy.dpdns.org {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+加入 Caddyfile 后 `caddy reload`（或 `systemctl restart caddy`）。
+
+**Nginx 片段：**
+```nginx
+server {
+    listen 443 ssl;
+    server_name tts.aucrazy.dpdns.org;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+> 一键脚本会在安装后自动打印对应的 Caddy 片段并写入 `caddy-snippet.txt`：
+> `DOMAIN=tts.aucrazy.dpdns.org curl -fsSL .../deploy.sh | bash`
+
+### 方式二：Cloudflare Tunnel（零开放端口，无需反代）
+
+适合不想开任何防火墙端口的场景，需 Cloudflare 账号 + 域名 + 一次性浏览器登录：
 
 ```bash
 cloudflared tunnel login
@@ -72,6 +105,7 @@ cloudflared tunnel create tts
 cloudflared tunnel route dns tts tts.你的域名.com
 cloudflared tunnel run --url http://localhost:8080 tts   # 若改过 PORT，请对应改成 127.0.0.1:${PORT}
 ```
+一键开启：`TUNNEL=1 DOMAIN=tts.example.com curl -fsSL .../deploy.sh | bash`
 
 ## legado_NG 配置
 
