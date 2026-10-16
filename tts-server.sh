@@ -149,13 +149,19 @@ EOF
 }
 
 show_url(){
-  local tok="" port
+  local tok="" port url
   port=$(get_port)
   [ -f "$ENV_FILE" ] && tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" | cut -d= -f2)
   echo "----------------------------------------"
   info "本地访问: http://127.0.0.1:$port"
   [ -n "$tok" ] && info "TTS_TOKEN: $tok"
-  echo "legado_NG 引擎服务地址示例: https://tts.你的域名.com${tok:+?token=$tok}"
+  url=$(tts_public_url)
+  if [ -n "$url" ]; then
+    info "对外服务地址: $url"
+  else
+    echo "legado_NG 引擎服务地址示例: https://tts.你的域名.com${tok:+?token=$tok}"
+    echo "（尚未配置对外访问，可运行 ./tts-server.sh setup-caddy 或菜单选 9）"
+  fi
   echo "----------------------------------------"
 }
 
@@ -201,6 +207,14 @@ status(){
   $DCC ps
   echo "---- 当前配置 ----"
   [ -f "$ENV_FILE" ] && grep -E '^(TTS_TOKEN|PORT)=' "$ENV_FILE"
+  local url
+  url=$(tts_public_url)
+  if [ -n "$url" ]; then
+    echo "---- 对外服务地址 ----"
+    echo "$url"
+  else
+    echo "（尚未配置对外访问，菜单选 9 或运行 ./tts-server.sh setup-caddy）"
+  fi
 }
 
 logs(){ $DCC logs -f --tail=50 tts; }
@@ -445,6 +459,29 @@ _docker_caddy_cfg(){
         | grep -oE '(^|[= ])--config[= ][^ ]+' | head -1 | awk '{print $NF}' | tr -d '"' || true)
   [ -n "$cfg" ] && { echo "$cfg"; return 0; }
   echo "/etc/caddy/Caddyfile"
+}
+
+# 从 Caddyfile 的 TTS-SERVER 标记块提取已配置的对外域名（无则返回空）
+get_tts_domain(){
+  local cf=""
+  cf=$(find_caddyfile)
+  if [ -z "$cf" ] || ! grep -q '# >>> Added by TTS-SERVER' "$cf" 2>/dev/null; then
+    local dcd
+    dcd=$(find_docker_caddy || true)
+    [ -n "$dcd" ] && cf="${dcd#*:}"
+  fi
+  [ -n "$cf" ] || return 0
+  sed -n '/# >>> Added by TTS-SERVER/,/# >>> end TTS-SERVER/p' "$cf" 2>/dev/null \
+    | grep -oE '^[A-Za-z0-9._-]+ \{' | head -1 | tr -d ' {'
+}
+
+# 拼对外服务地址（域名+token）
+tts_public_url(){
+  local domain tok
+  domain=$(get_tts_domain)
+  [ -n "$domain" ] || return 0
+  tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+  echo "https://$domain${tok:+?token=$tok}"
 }
 
 # 定位 Caddyfile（优先 systemd --config，否则常见路径）
