@@ -32,6 +32,17 @@ info(){ echo -e "${GREEN}[INFO]${NC} $*"; }
 warn(){ echo -e "${YELLOW}[WARN]${NC} $*"; }
 err(){ echo -e "${RED}[ERROR]${NC} $*"; }
 
+# 交互读取：优先 /dev/tty。curl|bash 场景 stdin 是管道且已 EOF，
+# 直接 read 会立即失败导致菜单"显示完就退出"。
+_ask(){
+  local __p="$1" __v="$2"
+  if [ -c /dev/tty ]; then
+    read -rp "$__p" "$__v" </dev/tty
+  else
+    read -rp "$__p" "$__v"
+  fi
+}
+
 ensure_docker(){
   if command -v docker >/dev/null 2>&1; then
     info "docker 已安装"
@@ -181,11 +192,7 @@ install(){
   # 交互式安装后询问是否立即配置对外访问（无人值守时自动跳过）
   if [ -t 0 ] || [ -c /dev/tty ]; then
     local ans=""
-    if [ -t 0 ]; then
-      read -rp "是否现在配置对外访问（Caddy 反代，自动装 Caddy + 签 HTTPS 证书）? [y/N]: " ans || true
-    else
-      read -rp "是否现在配置对外访问（Caddy 反代）? [y/N]: " ans < /dev/tty || true
-    fi
+    _ask "是否现在配置对外访问（Caddy 反代，自动装 Caddy + 签 HTTPS 证书）? [y/N]: " ans || true
     case "$ans" in
       y|Y) setup_caddy || true ;;
     esac
@@ -338,7 +345,7 @@ EOF
 setup_caddy(){
   local domain="${DOMAIN:-}"
   if [ -z "$domain" ]; then
-    read -rp "输入公网域名（需已解析到本机 IP，如 tts.example.com）: " domain || domain=""
+    _ask "输入公网域名（需已解析到本机 IP，如 tts.example.com）: " domain || domain=""
   fi
   if [ -z "$domain" ]; then
     warn "未提供域名，跳过对外访问配置"
@@ -598,7 +605,7 @@ change_port(){
   if [ -n "${NEW_PORT:-}" ]; then
     new="$NEW_PORT"
   else
-    read -rp "当前端口 $old，输入新端口 (留空取消): " new
+    _ask "当前端口 $old，输入新端口 (留空取消): " new || return 0
   fi
   [ -z "$new" ] && { info "已取消更改"; return; }
   case "$new" in
@@ -645,7 +652,7 @@ menu(){
     echo " 8) 更改端口 change-port"
     echo " 9) 对外访问配置 setup-caddy"
     echo " 0) 退出"
-    read -rp "请选择 [0-9]: " c
+    _ask "请选择 [0-9]: " c || exit 0
     case "$c" in
       1) install ;;
       2) uninstall ;;
@@ -659,7 +666,7 @@ menu(){
       0) exit 0 ;;
       *) warn "无效选择" ;;
     esac
-    echo; read -rp "按回车返回菜单..." _
+    echo; _ask "按回车返回菜单..." _ || exit 0
   done
 }
 
