@@ -176,6 +176,7 @@ install(){
     info "首次构建并启动服务 ($DCC up -d --build) ..."
     $DCC up -d --build
   fi
+  ensure_tts_in_caddy_network || true
   show_url
   # 交互式安装后询问是否立即配置对外访问（无人值守时自动跳过）
   if [ -t 0 ] || [ -c /dev/tty ]; then
@@ -200,7 +201,7 @@ uninstall(){
   info "已卸载（容器/镜像已移除，$ENV_FILE 保留以便重装）"
 }
 
-start(){ check_port; $DCC up -d; info "已启动"; }
+start(){ check_port; $DCC up -d; ensure_tts_in_caddy_network || true; info "已启动"; }
 stop(){ $DCC stop; info "已停止"; }
 
 status(){
@@ -222,7 +223,8 @@ logs(){ $DCC logs -f --tail=50 tts; }
 update(){
   info "拉取最新代码并重建镜像..."
   git pull || warn "非 git 目录或 pull 失败，跳过更新源码"
-  $DCC up -d --build
+  $DCC up -d --build || $DCC up -d
+  ensure_tts_in_caddy_network || true
   info "更新完成"
 }
 
@@ -347,21 +349,35 @@ setup_caddy(){
   port=$(get_port)
 
   # --- 路径 1：已有 Docker 版 Caddy 占着 80/443（如 new-api-caddy）→ 直接复用它，不另装 ---
-  local dcd="" dname dfile dcfg
+  # 容器版 Caddy 里 127.0.0.1 指它自己，反代目标必须用 TTS 容器名（tts-server），先接入网络
+  local dcd="" dname dfile dcfg tgt
   dcd=$(find_docker_caddy || true)
   if [ -n "$dcd" ]; then
     dname="${dcd%%:*}"
     dfile="${dcd#*:}"
     info "检测到已有 Docker 版 Caddy: $dname（Caddyfile: $dfile），直接复用，无需另装 Caddy..."
+    ensure_tts_in_caddy_network
+    tgt="tts-server:$port"
     cp "$dfile" "${dfile}.bak.$(date +%s)"
     if grep -q "$domain {" "$dfile"; then
-      info "Caddyfile 已含 $domain，跳过重复写入"
+      if sed -n '/# >>> Added by TTS-SERVER/,/# >>> end TTS-SERVER/p' "$dfile" | grep -q 'reverse_proxy 127\.0\.0\.1:'; then
+        # 旧写法(127.0.0.1)在容器内不可达，迁移为容器名
+        awk -v tgt="$tgt" '
+          /# >>> Added by TTS-SERVER/ { inblk=1 }
+          inblk && /reverse_proxy/ { print "    reverse_proxy " tgt; next }
+          /# >>> end TTS-SERVER/ { inblk=0 }
+          { print }
+        ' "$dfile" > "${dfile}.tmp" && mv "${dfile}.tmp" "$dfile"
+        info "已把反代目标从 127.0.0.1:$port 迁移为 $tgt（容器内无法访问宿主机回环地址）"
+      else
+        info "Caddyfile 已含 $domain 且反代目标正确，跳过写入"
+      fi
     else
       cat >> "$dfile" <<EOF
 
 # >>> Added by TTS-SERVER $(date +%F) <<<
 $domain {
-    reverse_proxy 127.0.0.1:$port
+    reverse_proxy $tgt
 }
 # >>> end TTS-SERVER <<<
 EOF
@@ -461,6 +477,29 @@ _docker_caddy_cfg(){
   echo "/etc/caddy/Caddyfile"
 }
 
+# 把 TTS 容器接入 Docker 版 Caddy 所在网络（别名 tts-server），使 Caddy 能按容器名反代。
+# 注意：compose 重建容器后会脱离该网络，install/start/update/change-port 后都要调一次。
+ensure_tts_in_caddy_network(){
+  command -v docker >/dev/null 2>&1 || return 0
+  local dcd dname tts_cid net nets
+  dcd=$(find_docker_caddy || true)
+  [ -n "$dcd" ] || return 0
+  dname="${dcd%%:*}"
+  tts_cid=$($DCC ps -q tts 2>/dev/null | head -1)
+  [ -n "$tts_cid" ] || return 0
+  net=$(docker inspect -f '{{range $k,$_ := .NetworkSettings.Networks}}{{$k}} {{end}}' "$dname" 2>/dev/null | cut -d' ' -f1)
+  [ -n "$net" ] || return 0
+  nets=$(docker inspect -f '{{range $k,$_ := .NetworkSettings.Networks}}{{$k}} {{end}}' "$tts_cid" 2>/dev/null)
+  if printf '%s' "$nets" | tr ' ' '\n' | grep -qx "$net"; then
+    return 0
+  fi
+  if docker network connect --alias tts-server "$net" "$tts_cid" >/dev/null 2>&1; then
+    info "已将 TTS 容器接入 Caddy 网络 $net（别名 tts-server）"
+  else
+    warn "TTS 容器接入网络 $net 失败，容器版 Caddy 将无法反代（127.0.0.1 在容器内指 Caddy 自己）"
+  fi
+}
+
 # 从 Caddyfile 的 TTS-SERVER 标记块提取已配置的对外域名（无则返回空）
 get_tts_domain(){
   local cf=""
@@ -525,9 +564,11 @@ update_caddy_port(){
     return 1
   fi
   cp "$cf" "${cf}.bak.$(date +%s)"
-  awk -v new="$new" '
+  local tgt
+  if [ "$scope" = "host" ]; then tgt="127.0.0.1:$new"; else tgt="tts-server:$new"; fi
+  awk -v tgt="$tgt" '
     /# >>> Added by TTS-SERVER/ { inblk=1 }
-    inblk && /reverse_proxy 127\.0\.0\.1:/ { print "    reverse_proxy 127.0.0.1:" new; next }
+    inblk && /reverse_proxy/ { print "    reverse_proxy " tgt; next }
     /# >>> end TTS-SERVER/ { inblk=0 }
     { print }
   ' "$cf" > "${cf}.tmp" && mv "${cf}.tmp" "$cf"
@@ -539,6 +580,7 @@ update_caddy_port(){
     fi
   else
     dcfg=$(_docker_caddy_cfg "$scope")
+    ensure_tts_in_caddy_network
     if docker exec "$scope" caddy reload --config "$dcfg" >/dev/null 2>&1; then
       info "容器 $scope 内 caddy 已 reload"
     elif docker restart "$scope" >/dev/null 2>&1; then
@@ -581,6 +623,7 @@ change_port(){
   info "已更新 .env -> PORT=$new"
   ensure_docker
   $DCC up -d
+  ensure_tts_in_caddy_network || true
   info "容器已用新端口重启"
   if update_caddy_port "$old" "$new"; then
     info "反代端口已同步为 $new"
