@@ -1,6 +1,6 @@
 // @name Self-hosted Edge TTS
 // @schema 1
-// @version 1.0.0
+// @version 1.0.1
 // @uuid self_hosted_edge_tts
 // @author You (self-hosted)
 // @url http://localhost:8080
@@ -128,7 +128,14 @@ function options() {
 }
 
 function baseUrl(options) {
-    return (options.baseUrl || "http://localhost:8080").replace(/\/+$/, "");
+    var u = String(options.baseUrl || "http://localhost:8080").trim();
+    // 兼容误贴完整地址（带 ?token=...）：自动提取 token 并剥离查询/锚点，
+    // 避免拼出  https://host?token=xxx/voices  打到首页拿到 HTML
+    var m = u.match(/[?&]token=([^&#]+)/);
+    if (m && !options.token) {
+        options.token = decodeURIComponent(m[1]);
+    }
+    return u.split("?")[0].split("#")[0].replace(/\/+$/, "");
 }
 
 function voices(options, ctx) {
