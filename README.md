@@ -70,11 +70,11 @@ sed -i 's/^PORT=.*/PORT=9090/' .env && bash ./tts-server.sh install
 
 ### 方式一：Caddy / Nginx 反代（推荐，若你已有反代）
 
-把域名（如 `tts.aucrazy.dpdns.org`，需先解析到 VPS 公网 IP）反代到本机 `${PORT}` 即可，HTTPS 由 Caddy 自动签发，VPS **无需开放 `${PORT}` 端口**（只用到 80/443，Caddy 已在跑）。
+把域名（如 `tts.example.com`，需先解析到 VPS 公网 IP）反代到本机 `${PORT}` 即可，HTTPS 由 Caddy 自动签发，VPS **无需开放 `${PORT}` 端口**（只用到 80/443，Caddy 已在跑）。
 
 **Caddy 片段：**
 ```caddy
-tts.aucrazy.dpdns.org {
+tts.example.com {
     reverse_proxy 127.0.0.1:8080
 }
 ```
@@ -84,7 +84,7 @@ tts.aucrazy.dpdns.org {
 ```nginx
 server {
     listen 443 ssl;
-    server_name tts.aucrazy.dpdns.org;
+    server_name tts.example.com;
     location / {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
@@ -93,7 +93,7 @@ server {
 ```
 
 > 一键脚本会在安装后自动打印对应的 Caddy 片段并写入 `caddy-snippet.txt`：
-> `DOMAIN=tts.aucrazy.dpdns.org curl -fsSL .../deploy.sh | bash`
+> `DOMAIN=tts.example.com curl -fsSL .../deploy.sh | bash`
 
 ### 方式二：Cloudflare Tunnel（零开放端口，无需反代）
 

@@ -5,7 +5,7 @@
 #   基础安装:
 #     curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   安装并直接生成 Caddy/Nginx 反代片段(用你的公网域名, 如已把 tts.xxx.org 指向 VPS):
-#     DOMAIN=tts.aucrazy.dpdns.org curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
+#     DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   改用 Cloudflare 隧道(零开放端口, 需浏览器登录 Cloudflare):
 #     TUNNEL=1 DOMAIN=tts.example.com curl -fsSL https://raw.githubusercontent.com/aucrazy-p/TTS-SERVER/main/deploy.sh | bash
 #   自定义端口(若 8080 被 s-ui/new-api 占用，例如改用 9090):
@@ -91,7 +91,7 @@ setup_tunnel(){
 }
 
 # ---------- 3. 对外暴露 ----------
-# 默认推荐：用你已有的 Caddy/Nginx 反代（你已用 tts.aucrazy.dpdns.org 指向 VPS）。
+# 默认推荐：用你已有的 Caddy/Nginx 反代（把你的域名解析到 VPS 公网 IP 即可）。
 # 备选：Cloudflare 隧道（零开放端口），设置 TUNNEL=1 启用。
 
 print_caddy(){
@@ -124,13 +124,13 @@ elif [ -n "${DOMAIN:-}" ]; then
   print_caddy "$DOMAIN"
 elif [ -t 0 ]; then
   echo "如何对外暴露（手机才能连）："
-  echo "  1) Caddy/Nginx 反代 (推荐，你已用 tts.aucrazy.dpdns.org 指向 VPS)"
+  echo "  1) Caddy/Nginx 反代 (推荐，把你的域名指向 VPS 即可)"
   echo "  2) Cloudflare 隧道 (零开放端口，需浏览器登录 Cloudflare)"
   read -rp "选择 [1/2] (默认1): " m
   if [ "$m" = "2" ]; then
     setup_tunnel
   else
-    read -rp "输入你的公网域名 (如 tts.aucrazy.dpdns.org): " d
+    read -rp "输入你的公网域名 (如 tts.example.com): " d
     print_caddy "$d"
   fi
 else
