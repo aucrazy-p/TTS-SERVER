@@ -1,8 +1,11 @@
-import io
 import os
 import json
+import queue
+import hashlib
 import asyncio
 import logging
+import threading
+from collections import OrderedDict
 
 from flask import Flask, request, Response
 import edge_tts
@@ -81,6 +84,20 @@ VOICES = [
 ]
 
 app = Flask(__name__)
+
+# ---- 合成结果 LRU 缓存（重复段落秒回；上限约 150MB / 600 条）----
+_CACHE = OrderedDict()
+_CACHE_LOCK = threading.Lock()
+_CACHE_MAX_ITEMS = 600
+_CACHE_MAX_BYTES = 150 * 1024 * 1024
+
+
+def _cache_put(key, audio):
+    with _CACHE_LOCK:
+        _CACHE[key] = audio
+        _CACHE.move_to_end(key)
+        while len(_CACHE) > _CACHE_MAX_ITEMS or sum(len(v) for v in _CACHE.values()) > _CACHE_MAX_BYTES:
+            _CACHE.popitem(last=False)
 
 _STATUS_PAGE = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -185,25 +202,63 @@ def tts():
     log.info("synthesize voice=%s len=%d rate=%s pitch=%s volume=%s style=%s(ignored)",
              voice, len(text), rate_s, pitch_s, vol_s, style or "-")
 
+    # ---- 缓存命中：同参数同文本直接秒回 ----
+    key = hashlib.sha1(
+        f"{voice}|{speed}|{pitch}|{volume}|{style}|{text}".encode()).hexdigest()
+    with _CACHE_LOCK:
+        if key in _CACHE:
+            _CACHE.move_to_end(key)
+            log.info("cache hit %s", key[:10])
+            return Response(_CACHE[key], mimetype="audio/mpeg")
+
     communicate = edge_tts.Communicate(
         text=text, voice=voice, rate=rate_s, volume=vol_s, pitch=pitch_s)
-    buf = io.BytesIO()
 
-    async def _collect():
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                buf.write(chunk["data"])
+    # ---- 流式合成：Edge 每生成一块立即推给客户端，显著降低首次出声等待 ----
+    q = queue.Queue(maxsize=256)
+
+    def _produce():
+        async def _collect():
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    q.put(chunk["data"])
+            q.put(None)  # 完成标记
+        try:
+            asyncio.run(_collect())
+        except Exception as e:
+            log.error("tts failed: %s", e)
+            q.put(e)
+
+    threading.Thread(target=_produce, daemon=True).start()
 
     try:
-        asyncio.run(_collect())
-    except Exception as e:  # 给出可读错误而非裸 500
-        log.error("tts failed: %s", e)
-        return Response(f"tts upstream error: {e}", 502)
-    if buf.getbuffer().nbytes == 0:
+        first = q.get(timeout=10)
+    except queue.Empty:
+        return Response("tts upstream timeout (no audio in 10s)", 502)
+    if first is None:
         return Response("tts upstream returned no audio", 502)
-    buf.seek(0)
-    return Response(buf.read(), mimetype="audio/mpeg")
+    if isinstance(first, Exception):
+        return Response(f"tts upstream error: {first}", 502)
+
+    acc = bytearray(first)
+
+    def _stream():
+        try:
+            yield first
+            while True:
+                item = q.get(timeout=60)
+                if item is None:
+                    _cache_put(key, bytes(acc))
+                    break
+                if isinstance(item, Exception):
+                    break
+                acc.extend(item)
+                yield item
+        finally:
+            pass
+
+    return Response(_stream(), mimetype="audio/mpeg")
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=PORT, threaded=True)
