@@ -1,0 +1,9 @@
+# 环境与缓存
+.env
+__pycache__/
+*.pyc
+venv/
+
+# 系统
+.DS_Store
+*.log

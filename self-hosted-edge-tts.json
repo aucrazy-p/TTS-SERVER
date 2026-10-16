@@ -1,0 +1,277 @@
+// @name Self-hosted Edge TTS
+// @schema 1
+// @version 1.0.0
+// @uuid self_hosted_edge_tts
+// @author You (self-hosted)
+// @url http://localhost:8080
+// @enabled true
+// @cookieJar false
+// @audioType audio/mpeg
+// @defaultSpeed 50
+// @defaultVolume 50
+// @defaultPitch 50
+// @sampleText 前不见古人，后不见来者。念天地之悠悠，独怆然而涕下。
+// @capabilities style_tags,emotion,synthesis_speed,synthesis_pitch,synthesis_volume
+// @description 自托管 Edge TTS 引擎：文本只发到你自己的服务器（VPS+Cloudflare），不经过任何第三方中转。把"服务地址"改成你的 https 域名即可。
+
+var STYLE_NAMES;
+
+function styleNames() {
+    if (STYLE_NAMES) {
+        return STYLE_NAMES;
+    }
+    STYLE_NAMES = {
+    "advertisement-upbeat": "广告活力",
+    "affectionate": "深情",
+    "angry": "愤怒",
+    "anxious": "焦虑",
+    "assassin": "刺客",
+    "assistant": "助手",
+    "calm": "平静",
+    "captain": "队长",
+    "cavalier": "骑士",
+    "chat": "聊天",
+    "chat-casual": "随意聊天",
+    "cheerful": "欢快",
+    "comforting": "安慰",
+    "complaining": "抱怨",
+    "curious": "好奇",
+    "customer-service": "客户服务",
+    "customerservice": "客户服务",
+    "cute": "可爱",
+    "debating": "辩论",
+    "depressed": "沮丧",
+    "disappointed": "失望",
+    "disgruntled": "不满",
+    "documentary-narration": "纪录片旁白",
+    "empathetic": "共情",
+    "embarrassed": "尴尬",
+    "encouraging": "鼓励",
+    "envious": "羡慕",
+    "excited": "兴奋",
+    "fearful": "恐惧",
+    "friendly": "友好",
+    "game-narrator": "游戏旁白",
+    "gentle": "温柔",
+    "geomancer": "方士",
+    "guilty": "愧疚",
+    "live-commercial": "直播带货",
+    "livecommercial": "直播带货",
+    "lonely": "孤独",
+    "lyrical": "抒情",
+    "narration-professional": "专业旁白",
+    "narration-relaxed": "舒缓旁白",
+    "newscast": "新闻播报",
+    "newscast-casual": "轻松新闻",
+    "news": "新闻",
+    "poet": "诗人",
+    "poetry-reading": "诗歌朗诵",
+    "prince": "王子",
+    "sad": "悲伤",
+    "sentimental": "感伤",
+    "serious": "严肃",
+    "shy": "害羞",
+    "sorry": "歉意",
+    "sports-commentary": "体育解说",
+    "sports-commentary-excited": "兴奋体育解说",
+    "story": "故事",
+    "story-telling": "讲故事",
+    "strict": "严厉",
+    "surprised": "惊讶",
+    "tired": "疲惫",
+    "voice-assistant": "语音助手",
+    "whispering": "耳语"
+    };
+    return STYLE_NAMES;
+}
+
+var EXPRESSIVE_STYLE_ALIASES;
+
+function expressiveStyleAliases() {
+    if (EXPRESSIVE_STYLE_ALIASES) {
+        return EXPRESSIVE_STYLE_ALIASES;
+    }
+    EXPRESSIVE_STYLE_ALIASES = [
+    { style: "angry", terms: ["angry", "愤怒", "生气", "恼怒", "暴怒"] },
+    { style: "anxious", terms: ["anxious", "焦虑", "紧张", "不安"] },
+    { style: "calm", terms: ["calm", "平静", "克制", "冷静", "沉着"] },
+    { style: "cheerful", terms: ["cheerful", "欢快", "开心", "喜悦", "活泼"] },
+    { style: "comforting", terms: ["comforting", "安慰", "宽慰"] },
+    { style: "curious", terms: ["curious", "好奇", "疑惑"] },
+    { style: "depressed", terms: ["depressed", "沮丧", "低落", "压抑"] },
+    { style: "disappointed", terms: ["disappointed", "失望"] },
+    { style: "embarrassed", terms: ["embarrassed", "尴尬", "窘迫"] },
+    { style: "empathetic", terms: ["empathetic", "共情", "同情"] },
+    { style: "excited", terms: ["excited", "兴奋", "激动", "高昂"] },
+    { style: "fearful", terms: ["fearful", "恐惧", "害怕", "惊恐"] },
+    { style: "gentle", terms: ["gentle", "温柔", "柔和", "轻柔"] },
+    { style: "sad", terms: ["sad", "悲伤", "难过", "哀伤"] },
+    { style: "serious", terms: ["serious", "严肃", "郑重", "庄重"] },
+    { style: "shy", terms: ["shy", "害羞", "羞涩"] },
+    { style: "sorry", terms: ["sorry", "歉意", "抱歉", "愧疚"] },
+    { style: "surprised", terms: ["surprised", "惊讶", "震惊", "意外"] },
+    { style: "whispering", terms: ["whispering", "耳语", "低语", "悄声"] },
+    { style: "newscast", terms: ["newscast", "新闻播报", "播报"] },
+    { style: "poetry-reading", terms: ["poetry-reading", "诗歌朗诵", "朗诵"] },
+    { style: "story", terms: ["story", "故事", "讲故事", "叙事"] },
+    { style: "story-telling", terms: ["story-telling", "故事", "讲故事", "叙事"] }
+    ];
+    return EXPRESSIVE_STYLE_ALIASES;
+}
+
+function options() {
+    return [
+        { key: "baseUrl", label: "服务地址", type: "text", defaultValue: "http://localhost:8080" },
+        { key: "token", label: "访问令牌", type: "text", defaultValue: "" },
+        { key: "timeout", label: "超时秒数", type: "number", defaultValue: "30" }
+    ];
+}
+
+function baseUrl(options) {
+    return (options.baseUrl || "http://localhost:8080").replace(/\/+$/, "");
+}
+
+function voices(options, ctx) {
+    var body = java.ajax(baseUrl(options) + "/voices" + tokenQuery(options));
+    var json = JSON.parse(String(body || "{}"));
+    var catalog = json && json.voices ? json.voices : [];
+    var result = [];
+    for (var i = 0; i < catalog.length; i++) {
+        var item = catalog[i];
+        if (!item || !item.id || !item.name) continue;
+        var tags = ["SelfHosted", item.profile || ""];
+        if (item.hd) tags.push("HD");
+        result.push({
+            id: String(item.id),
+            name: String(item.name),
+            language: item.id.indexOf("zh-TW-") === 0 ? "zh-TW" : "zh-CN",
+            gender: item.gender || "",
+            style: item.styles && item.styles.length ? item.styles.length + " 种风格" : "",
+            tags: tags,
+            extra: {
+                provider: "self-hosted-edge",
+                profile: item.profile || "",
+                azure_styles: item.styles || [],
+                roles: item.roles || [],
+                styles: styleOptions(item.styles || [])
+            }
+        });
+    }
+    return result;
+}
+
+function styleOptions(styles) {
+    var result = [];
+    var names = styleNames();
+    for (var i = 0; i < styles.length; i++) {
+        var id = String(styles[i]);
+        result.push({ id: id, name: names[id] || id, value: id });
+    }
+    return result;
+}
+
+function tokenQuery(options) {
+    var t = options.token || "";
+    return t ? ("?token=" + encodeURIComponent(t)) : "";
+}
+
+function synthesize(text, voice, params, options, ctx) {
+    var api = baseUrl(options);
+    var voiceId = String((voice && voice.id) || "zh-CN-XiaoxiaoNeural");
+    var style = selectedStyleValue(voice) || automaticStyleValue(voice, ctx);
+    var query = [
+        "text=" + encodeURIComponent(text),
+        "voice=" + encodeURIComponent(voiceId),
+        "speed=" + encodeURIComponent(normalizedParam(params, "speed")),
+        "pitch=" + encodeURIComponent(normalizedParam(params, "pitch")),
+        "volume=" + encodeURIComponent(normalizedParam(params, "volume")),
+        "style=" + encodeURIComponent(style)
+    ];
+    var tk = options.token || "";
+    if (tk) query.push("token=" + encodeURIComponent(tk));
+    return {
+        url: api + "/tts?" + query.join("&"),
+        method: "GET",
+        audioContentType: "audio/mpeg",
+        timeout: Number(options.timeout || 30),
+        retry: 1
+    };
+}
+
+function selectedStyleValue(voice) {
+    if (voice && voice.selected_style && voice.selected_style.value != null) {
+        return String(voice.selected_style.value);
+    }
+    if (voice && voice.style_value != null) {
+        return String(voice.style_value);
+    }
+    return "";
+}
+
+function automaticStyleValue(voice, ctx) {
+    var supported = voice && voice.extra && voice.extra.azure_styles
+        ? voice.extra.azure_styles
+        : [];
+    if (!supported.length) {
+        return "";
+    }
+    var expressive = ctx && ctx.synthesis && ctx.synthesis.expressive
+        ? ctx.synthesis.expressive
+        : null;
+    if (!expressive) {
+        return "";
+    }
+    var concepts = [];
+    if (expressive.emotion) {
+        concepts.push(String(expressive.emotion));
+    }
+    var styleConcepts = expressive.style_concepts || [];
+    for (var i = 0; i < styleConcepts.length; i++) {
+        concepts.push(String(styleConcepts[i]));
+    }
+    for (var j = 0; j < concepts.length; j++) {
+        var matched = styleForConcept(concepts[j], supported);
+        if (matched) {
+            return matched;
+        }
+    }
+    return "";
+}
+
+function styleForConcept(concept, supported) {
+    var normalized = String(concept || "").toLowerCase().replace(/^\s+|\s+$/g, "");
+    if (!normalized) {
+        return "";
+    }
+    if (containsStyle(supported, normalized)) {
+        return normalized;
+    }
+    var aliases = expressiveStyleAliases();
+    for (var i = 0; i < aliases.length; i++) {
+        var item = aliases[i];
+        if (!containsStyle(supported, item.style)) {
+            continue;
+        }
+        for (var j = 0; j < item.terms.length; j++) {
+            if (normalized.indexOf(item.terms[j]) >= 0) {
+                return item.style;
+            }
+        }
+    }
+    return "";
+}
+
+function containsStyle(styles, expected) {
+    for (var i = 0; i < styles.length; i++) {
+        if (String(styles[i]).toLowerCase() === expected) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function normalizedParam(params, key) {
+    var value = params && params[key] != null ? Number(params[key]) : 50;
+    if (isNaN(value)) value = 50;
+    return Math.max(0, Math.min(100, Math.round(value)));
+}

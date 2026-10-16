@@ -1,0 +1,11 @@
+services:
+  tts:
+    build: .
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      # 建议设置一个随机长字符串；Cloudflare 公网暴露时，NG 引擎 URL 里带 ?token= 这个值
+      - TTS_TOKEN=${TTS_TOKEN:-}
+    # 只绑到宿主机回环地址，外部不可直接访问；cloudflared 在宿主机上连 127.0.0.1:8080
+    ports:
+      - "127.0.0.1:8080:8080"
