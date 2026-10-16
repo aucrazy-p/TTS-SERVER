@@ -318,7 +318,7 @@ EOF
   command -v caddy >/dev/null 2>&1
 }
 
-# 配置对外访问：装 Caddy -> 写 Caddyfile(带标记块) -> reload（幂等，可重复执行）
+# 配置对外访问：优先复用已有 Docker 版 Caddy -> 否则装宿主机 Caddy -> 写反代块 -> reload（幂等）
 setup_caddy(){
   local domain="${DOMAIN:-}"
   if [ -z "$domain" ]; then
@@ -329,18 +329,47 @@ setup_caddy(){
     return 1
   fi
 
+  local port
+  port=$(get_port)
+
+  # --- 路径 1：已有 Docker 版 Caddy 占着 80/443（如 new-api-caddy）→ 直接复用它，不另装 ---
+  local dcd="" dname dfile dcfg
+  dcd=$(find_docker_caddy || true)
+  if [ -n "$dcd" ]; then
+    dname="${dcd%%:*}"
+    dfile="${dcd#*:}"
+    info "检测到已有 Docker 版 Caddy: $dname（Caddyfile: $dfile），直接复用，无需另装 Caddy..."
+    cp "$dfile" "${dfile}.bak.$(date +%s)"
+    if grep -q "$domain {" "$dfile"; then
+      info "Caddyfile 已含 $domain，跳过重复写入"
+    else
+      cat >> "$dfile" <<EOF
+
+# >>> Added by TTS-SERVER $(date +%F) <<<
+$domain {
+    reverse_proxy 127.0.0.1:$port
+}
+# >>> end TTS-SERVER <<<
+EOF
+      info "已向 $dfile 追加 $domain 反代配置（原文件已备份为 ${dfile}.bak.*）"
+    fi
+    dcfg=$(_docker_caddy_cfg "$dname")
+    if docker exec "$dname" caddy reload --config "$dcfg" >/dev/null 2>&1; then
+      info "容器内 caddy 已 reload ($dcfg)"
+    elif docker restart "$dname" >/dev/null 2>&1; then
+      info "reload 失败，已重启容器 $dname 使配置生效"
+    else
+      warn "容器内 reload/重启均失败，请手动检查: docker exec $dname caddy reload --config $dcfg"
+    fi
+    _show_caddy_ok "$domain"
+    return 0
+  fi
+
+  # --- 路径 2：宿主机 Caddy ---
   if ! command -v caddy >/dev/null 2>&1; then
     if port_in_use 80 || port_in_use 443; then
-      warn "80/443 已被占用，Caddy 无法接管 443（避免与现有服务冲突）。占用情况："
+      warn "80/443 已被占用，且未找到可复用的 Docker 版 Caddy。占用情况："
       ss -ltnp 2>/dev/null | grep -E ':(80|443) ' | sed 's/^/    /' || true
-      if command -v docker >/dev/null 2>&1; then
-        local dmap
-        dmap=$(docker ps --format '{{.Names}} => {{.Ports}}' 2>/dev/null | grep -E ':(80|443)->' || true)
-        if [ -n "$dmap" ]; then
-          warn "占用者来自 Docker 容器："
-          echo "$dmap" | sed 's/^/    /'
-        fi
-      fi
       print_caddy "$domain"; return 1
     fi
     install_caddy || { warn "Caddy 安装失败，改为打印片段："; print_caddy "$domain"; return 1; }
@@ -355,8 +384,6 @@ setup_caddy(){
     warn "Caddy 使用 JSON 配置，自动写入不适用，改为打印片段："; print_caddy "$domain"; return 1
   fi
 
-  local port
-  port=$(get_port)
   cp "$cf" "${cf}.bak.$(date +%s)"
   if grep -q "$domain {" "$cf"; then
     info "Caddyfile 已含 $domain，跳过重复写入"
@@ -377,13 +404,47 @@ EOF
     caddy reload --config "$cf" >/dev/null 2>&1 && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
   fi
 
-  local tok
+  _show_caddy_ok "$domain"
+}
+
+_show_caddy_ok(){
+  local domain="$1" tok
   tok=$(grep '^TTS_TOKEN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
   echo "-------------------------------------------"
   echo "✓ 对外暴露已配置： https://$domain${tok:+?token=$tok}"
   echo "  （HTTPS 证书由 Caddy 自动向 Let's Encrypt 申请并续期）"
   echo "  到 legado_NG 导入 self-hosted-edge-tts.json，服务地址填上面的 URL"
   echo "-------------------------------------------"
+}
+
+# 查找绑定了 80/443 的 Docker 版 Caddy 容器，返回 "容器名:Caddyfile宿主机路径"，无则返回非零
+find_docker_caddy(){
+  command -v docker >/dev/null 2>&1 || return 1
+  local cid name mounts src
+  for cid in $(docker ps --format '{{.ID}}' 2>/dev/null); do
+    docker port "$cid" 2>/dev/null | grep -qE ':443' || continue
+    name=$(docker inspect -f '{{.Name}}' "$cid" 2>/dev/null | sed 's|^/||')
+    case "$name" in *caddy*) ;; *) continue ;; esac
+    mounts=$(docker inspect -f '{{range .Mounts}}{{println .Source .Destination}}{{end}}' "$cid" 2>/dev/null)
+    src=$(printf '%s\n' "$mounts" | awk '{
+      sub(/\/$/, "", $2)
+      if ($2 ~ /Caddyfile$/) { print $1; exit }
+      if ($2 == "/etc/caddy") { print $1 "/Caddyfile"; exit }
+    }')
+    [ -n "$src" ] && [ -f "$src" ] || continue
+    echo "$name:$src"
+    return 0
+  done
+  return 1
+}
+
+# 取容器内 caddy 实际使用的配置路径（从启动命令解析，兜底 /etc/caddy/Caddyfile）
+_docker_caddy_cfg(){
+  local name="$1" cfg
+  cfg=$(docker inspect -f '{{join .Config.Cmd " "}}' "$name" 2>/dev/null \
+        | grep -oE '(^|[= ])--config[= ][^ ]+' | head -1 | awk '{print $NF}' | tr -d '"' || true)
+  [ -n "$cfg" ] && { echo "$cfg"; return 0; }
+  echo "/etc/caddy/Caddyfile"
 }
 
 # 定位 Caddyfile（优先 systemd --config，否则常见路径）
@@ -400,10 +461,20 @@ find_caddyfile(){
   echo "$cf"
 }
 
-# 在 TTS 标记块内把反代端口改为 new，并 reload caddy
+# 在 TTS 标记块内把反代端口改为 new，并 reload caddy（支持宿主机 Caddy 与 Docker 版 Caddy）
 update_caddy_port(){
-  local old="$1" new="$2" cf
+  local old="$1" new="$2" cf="" scope="host" dcd dcfg
   cf=$(find_caddyfile)
+  if [ -n "$cf" ] && grep -q '# >>> Added by TTS-SERVER' "$cf" 2>/dev/null; then
+    scope="host"
+  else
+    # 宿主机 Caddyfile 无标记块时，尝试 Docker 版 Caddy
+    dcd=$(find_docker_caddy || true)
+    if [ -n "$dcd" ]; then
+      scope="${dcd%%:*}"
+      cf="${dcd#*:}"
+    fi
+  fi
   if [ -z "$cf" ]; then
     warn "未找到 Caddyfile，无法自动更新反代端口，请手动把反代端口改为 $new"
     return 1
@@ -423,10 +494,21 @@ update_caddy_port(){
     /# >>> end TTS-SERVER/ { inblk=0 }
     { print }
   ' "$cf" > "${cf}.tmp" && mv "${cf}.tmp" "$cf"
-  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; then
-    systemctl reload caddy && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
+  if [ "$scope" = "host" ]; then
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet caddy; then
+      systemctl reload caddy && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
+    else
+      caddy reload --config "$cf" >/dev/null 2>&1 && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
+    fi
   else
-    caddy reload --config "$cf" >/dev/null 2>&1 && info "caddy 已 reload" || warn "caddy reload 失败，请手动: caddy reload"
+    dcfg=$(_docker_caddy_cfg "$scope")
+    if docker exec "$scope" caddy reload --config "$dcfg" >/dev/null 2>&1; then
+      info "容器 $scope 内 caddy 已 reload"
+    elif docker restart "$scope" >/dev/null 2>&1; then
+      info "已重启容器 $scope 使新端口生效"
+    else
+      warn "reload 失败，请手动: docker exec $scope caddy reload --config $dcfg"
+    fi
   fi
 }
 
