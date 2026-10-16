@@ -3,7 +3,6 @@ import os
 import json
 import asyncio
 import logging
-import html
 
 from flask import Flask, request, Response
 import edge_tts
@@ -176,28 +175,32 @@ def tts():
     volume = _clamp(request.args.get("volume"), 0, 100, 50)
     style = request.args.get("style", "").strip()
     rate, pt, vol = _map_units(speed, pitch, volume)
-    lang = "zh-TW" if voice.startswith("zh-TW-") else "zh-CN"
 
     log.info("synthesize voice=%s len=%d rate=%.0f%% pitch=%dHz vol=%.0f%% style=%s",
              voice, len(text), rate, pt, vol, style or "-")
 
-    escaped = html.escape(text, quote=True)
-    inner = f'<prosody rate="{rate:.0f}%" pitch="{pt:+}Hz" volume="{vol:+}%">{escaped}</prosody>'
-    if style:
-        inner = f'<mstts:express-as style="{style}">{inner}</mstts:express-as>'
-    ssml = (
-        f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
-        f'xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="{lang}">'
-        f'<voice name="{voice}">{inner}</voice></speak>'
-    )
+    # edge-tts 7.x 移除了自定义 SSML 支持（服务端封禁），改用原生参数。
+    # style 参数已无法注入（express-as 需要 SSML），记录后忽略。
+    rate_s, vol_s, pitch_s = f"{rate:+.0f}%", f"{vol:+.0f}%", f"{pt:+d}Hz"
+    log.info("synthesize voice=%s len=%d rate=%s pitch=%s volume=%s style=%s(ignored)",
+             voice, len(text), rate_s, pitch_s, vol_s, style or "-")
 
-    communicate = edge_tts.Communicate(text="", voice=voice, ssml=ssml)
+    communicate = edge_tts.Communicate(
+        text=text, voice=voice, rate=rate_s, volume=vol_s, pitch=pitch_s)
     buf = io.BytesIO()
+
     async def _collect():
         async for chunk in communicate.stream():
             if chunk["type"] == "audio":
                 buf.write(chunk["data"])
-    asyncio.run(_collect())
+
+    try:
+        asyncio.run(_collect())
+    except Exception as e:  # 给出可读错误而非裸 500
+        log.error("tts failed: %s", e)
+        return Response(f"tts upstream error: {e}", 502)
+    if buf.getbuffer().nbytes == 0:
+        return Response("tts upstream returned no audio", 502)
     buf.seek(0)
     return Response(buf.read(), mimetype="audio/mpeg")
 

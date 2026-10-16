@@ -1,2 +1,2 @@
-edge-tts
-flask
+edge-tts>=7
+flask>=3
